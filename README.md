@@ -8,13 +8,25 @@ Download this folder anywhere you like, then run setup from inside it:
 
 ```bash
 cd /path/to/flight-monitor
-bash scripts/flight-monitor setup
+bash scripts/flight-monitor setup \
+  --client-id YOUR_AMADEUS_CLIENT_ID \
+  --client-secret YOUR_AMADEUS_CLIENT_SECRET
 ```
 
-Setup creates the data directory and installs the CLI to `/usr/local/bin` so it's available globally. If you want a different install location:
+Setup validates your Amadeus credentials, writes them to `~/.flight-monitor/config`, and installs the CLI to `/usr/local/bin`. Optional flags:
 
 ```bash
-bash scripts/flight-monitor setup --bin-path ~/.local/bin/flight-monitor
+bash scripts/flight-monitor setup \
+  --client-id YOUR_AMADEUS_CLIENT_ID \
+  --client-secret YOUR_AMADEUS_CLIENT_SECRET \
+  --currency USD \
+  --bin-path ~/.local/bin/flight-monitor
+```
+
+If you've already run setup before, you can re-run it without flags to reinstall the CLI — existing credentials will be reused from `~/.flight-monitor/config`:
+
+```bash
+bash scripts/flight-monitor setup
 ```
 
 After setup, `flight-monitor` is available globally:
@@ -22,17 +34,6 @@ After setup, `flight-monitor` is available globally:
 ```bash
 flight-monitor version
 ```
-
-## Credentials
-
-Add your Amadeus production credentials to `~/.openclaw/.env`:
-
-```env
-AMADEUS_CLIENT_ID=your_client_id
-AMADEUS_CLIENT_SECRET=your_client_secret
-```
-
-Restart the Gateway after editing. The Gateway loads this file on start and all agent turns (including cron) inherit the environment automatically.
 
 ## Register the Skill with OpenClaw
 
@@ -63,7 +64,8 @@ Then reload: `openclaw skills refresh` or restart the Gateway.
 flight-monitor add \
   --origin PEK --destination LHR \
   --depart-date 2025-06-15 --flex-days 3 \
-  --cabin BUSINESS --target-price 5000
+  --cabin BUSINESS \
+  --discord-channel 1234567890
 
 # List all monitors
 flight-monitor list
@@ -78,6 +80,7 @@ flight-monitor check fm-abc123
 ## Data
 
 Everything lives in `~/.flight-monitor/`:
+- `config` — Amadeus credentials and default currency
 - `monitors.json` — all monitor tasks
 - `history/<monitor-id>.csv` — price history per route
 
