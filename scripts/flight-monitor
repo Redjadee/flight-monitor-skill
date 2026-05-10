@@ -311,31 +311,33 @@ EOF
 cmd_add() {
   require_cmd curl jq
 
-  local origin="" dest="" depart_date="" target_price=""
+  local origin="" dest="" depart_date=""
   local flex_days=0 return_date="" cabin="ECONOMY" adults=1
-  local nonstop=false airlines="" check_interval="6h"
+  local nonstop=false airlines="" check_interval="1d"
+  local alert_days=7 discord_channel=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --origin)         origin="$2";         shift 2 ;;
-      --destination)    dest="$2";           shift 2 ;;
-      --depart-date)    depart_date="$2";    shift 2 ;;
-      --target-price)   target_price="$2";   shift 2 ;;
-      --flex-days)      flex_days="$2";      shift 2 ;;
-      --return-date)    return_date="$2";    shift 2 ;;
-      --cabin)          cabin="${2^^}";      shift 2 ;;
-      --adults)         adults="$2";         shift 2 ;;
-      --nonstop)        nonstop=true;        shift   ;;
-      --airlines)       airlines="$2";       shift 2 ;;
-      --check-interval) check_interval="$2"; shift 2 ;;
+      --origin)           origin="$2";           shift 2 ;;
+      --destination)      dest="$2";             shift 2 ;;
+      --depart-date)      depart_date="$2";      shift 2 ;;
+      --flex-days)        flex_days="$2";        shift 2 ;;
+      --return-date)      return_date="$2";      shift 2 ;;
+      --cabin)            cabin="${2^^}";        shift 2 ;;
+      --adults)           adults="$2";           shift 2 ;;
+      --nonstop)          nonstop=true;          shift   ;;
+      --airlines)         airlines="$2";         shift 2 ;;
+      --check-interval)   check_interval="$2";   shift 2 ;;
+      --alert-days)       alert_days="$2";       shift 2 ;;
+      --discord-channel)  discord_channel="$2";  shift 2 ;;
       *) die "Unknown option: $1" ;;
     esac
   done
 
-  [ -z "${origin}" ]       && die "--origin is required"
-  [ -z "${dest}" ]         && die "--destination is required"
-  [ -z "${depart_date}" ]  && die "--depart-date is required"
-  [ -z "${target_price}" ] && die "--target-price is required"
+  [ -z "${origin}" ]          && die "--origin is required"
+  [ -z "${dest}" ]            && die "--destination is required"
+  [ -z "${depart_date}" ]     && die "--depart-date is required"
+  [ -z "${discord_channel}" ] && die "--discord-channel is required"
 
   load_credentials
   ensure_dirs
@@ -366,7 +368,8 @@ cmd_add() {
      --argjson adults "${adults}" \
      --argjson nonstop "${nonstop}" \
      --argjson airlines "${airlines_json}" \
-     --argjson target_price "${target_price}" \
+     --argjson alert_days "${alert_days}" \
+     --arg discord_channel "${discord_channel}" \
      --arg currency "${currency}" \
      --arg interval "${check_interval}" \
      --arg ts "$(now_iso)" \
@@ -375,12 +378,13 @@ cmd_add() {
        depart_date: $depart_date, flex_days: $flex_days,
        return_date: (if $return_date == "" then null else $return_date end),
        cabin: $cabin, adults: $adults, nonstop: $nonstop, airlines: $airlines,
-       target_price: $target_price, currency: $currency, check_interval: $interval,
+       alert_days: $alert_days, discord_channel_id: $discord_channel,
+       currency: $currency, check_interval: $interval,
        cron_job_id: null, status: "active", created_at: $ts,
        last_checked: null, last_price: null, last_flight: null
      }]' "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
 
-  local offer below="false" link=""
+  local offer link=""
   if offer=$(search_flexible "${monitor_id}" "${token}"); then
     append_history "${monitor_id}" "${offer}"
 
@@ -397,14 +401,13 @@ cmd_add() {
        'map(if .id == $id then .last_price = $price | .last_flight = $flight | .last_checked = $ts else . end)' \
        "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
 
-    awk "BEGIN{exit!(${offer_price}<${target_price})}" && below="true" || true
     link=$(flights_link "${origin}" "${dest}" "${offer_date}" "${cabin}")
   else
     offer="null"
   fi
 
-  printf '{"status":"ok","monitor_id":"%s","current_offer":%s,"below_target":%s,"google_flights":"%s"}\n' \
-    "${monitor_id}" "${offer:-null}" "${below}" "${link}"
+  printf '{"status":"ok","monitor_id":"%s","discord_channel_id":"%s","current_offer":%s,"google_flights":"%s"}\n' \
+    "${monitor_id}" "${discord_channel}" "${offer:-null}" "${link}"
 }
 
 # ─── CMD: list ────────────────────────────────────────────────────────────────
@@ -459,6 +462,18 @@ cmd_set_cron() {
   printf '{"status":"ok","monitor_id":"%s","cron_job_id":"%s"}\n' "${monitor_id}" "${cron_id}"
 }
 
+# ─── Average Price ────────────────────────────────────────────────────────────
+
+calc_average_price() {
+  local monitor_id="$1" days="$2"
+  local hist_file="${HISTORY_DIR}/${monitor_id}.csv"
+  [ -f "${hist_file}" ] || return 1
+  local prices
+  prices=$(tail -n "+2" "${hist_file}" | tail -n "${days}" | cut -d',' -f3 | grep -E '^[0-9]+(\.[0-9]+)?$')
+  [ -z "${prices}" ] && return 1
+  echo "${prices}" | awk '{sum+=$1; count++} END{if(count>0) printf "%.2f", sum/count; else exit 1}'
+}
+
 # ─── CMD: check ───────────────────────────────────────────────────────────────
 
 cmd_check() {
@@ -476,20 +491,22 @@ cmd_check() {
   local token
   token=$(get_token)
 
+  local alert_days discord_channel_id
+  alert_days=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .alert_days // 7' "${MONITORS_FILE}")
+  discord_channel_id=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .discord_channel_id // ""' "${MONITORS_FILE}")
+
   local offer
   if ! offer=$(search_flexible "${monitor_id}" "${token}"); then
-    printf '{"status":"ok","monitor_id":"%s","below_target":false,"price":null,"offer":null}\n' "${monitor_id}"
+    printf '{"status":"ok","monitor_id":"%s","discord_channel_id":"%s","price":null,"average_price":null,"days_in_avg":null,"below_average":null,"offer":null}\n' \
+      "${monitor_id}" "${discord_channel_id}"
     exit 0
   fi
 
   append_history "${monitor_id}" "${offer}"
 
-  local offer_price offer_flight target_price below="false"
+  local offer_price offer_flight
   offer_price=$(echo "${offer}"  | jq -r '.price')
   offer_flight=$(echo "${offer}" | jq -r '.flight')
-  target_price=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .target_price' "${MONITORS_FILE}")
-
-  awk "BEGIN{exit!(${offer_price}<${target_price})}" && below="true" || true
 
   local tmp
   tmp=$(mktemp)
@@ -500,6 +517,16 @@ cmd_check() {
      'map(if .id == $id then .last_price = $price | .last_flight = $flight | .last_checked = $ts else . end)' \
      "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
 
+  local average_price below_average="false" days_in_avg="null"
+  if average_price=$(calc_average_price "${monitor_id}" "${alert_days}"); then
+    local hist_count
+    hist_count=$(tail -n "+2" "${HISTORY_DIR}/${monitor_id}.csv" | wc -l | tr -d ' ')
+    days_in_avg=$(( hist_count < alert_days ? hist_count : alert_days ))
+    awk "BEGIN{exit!(${offer_price}<${average_price})}" && below_average="true" || true
+  else
+    average_price="null"
+  fi
+
   local origin dest cabin offer_date link
   origin=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .origin'      "${MONITORS_FILE}")
   dest=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .destination'   "${MONITORS_FILE}")
@@ -507,8 +534,8 @@ cmd_check() {
   offer_date=$(echo "${offer}" | jq -r '.date')
   link=$(flights_link "${origin}" "${dest}" "${offer_date}" "${cabin}")
 
-  printf '{"status":"ok","monitor_id":"%s","below_target":%s,"price":%s,"target_price":%s,"offer":%s,"google_flights":"%s"}\n' \
-    "${monitor_id}" "${below}" "${offer_price}" "${target_price}" "${offer}" "${link}"
+  printf '{"status":"ok","monitor_id":"%s","discord_channel_id":"%s","price":%s,"average_price":%s,"days_in_avg":%s,"below_average":%s,"offer":%s,"google_flights":"%s"}\n' \
+    "${monitor_id}" "${discord_channel_id}" "${offer_price}" "${average_price}" "${days_in_avg}" "${below_average}" "${offer}" "${link}"
 }
 
 # ─── CMD: debug ───────────────────────────────────────────────────────────────
@@ -583,11 +610,11 @@ Usage:
                             [--no-install]
 
   flight-monitor add        --origin <IATA|city> --destination <IATA|city>
-                            --depart-date <YYYY-MM-DD> --target-price <number>
-                            [--flex-days 3] [--return-date <YYYY-MM-DD>]
+                            --depart-date <YYYY-MM-DD> --discord-channel <channel-id>
+                            [--alert-days 7] [--flex-days 3] [--return-date <YYYY-MM-DD>]
                             [--cabin ECONOMY|BUSINESS|FIRST|PREMIUM_ECONOMY]
                             [--adults 1] [--nonstop] [--airlines CA,CX]
-                            [--check-interval 6h]
+                            [--check-interval 1d]
 
   flight-monitor list
   flight-monitor remove     <monitor-id>

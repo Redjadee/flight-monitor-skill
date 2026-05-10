@@ -12,7 +12,7 @@ description: >
 
 # Flight Monitor Skill
 
-Monitors flight prices via Amadeus API. Uses the `flight-monitor` CLI (must be installed and configured via `flight-monitor setup`). Notifies the user through OpenClaw cron when prices drop below a target.
+Monitors flight prices via Amadeus API. Uses the `flight-monitor` CLI (must be installed and configured via `flight-monitor setup`). Sends a price update to the user's Discord channel on every cron run, and flags when the current price drops below the N-day historical average.
 
 ## Quick Reference
 
@@ -50,9 +50,10 @@ Parse the user's request. Required:
 - `origin` — IATA code or city name (the CLI resolves city names automatically)
 - `destination` — IATA code or city name
 - `depart_date` — exact date in YYYY-MM-DD
-- `target_price` — numeric threshold in the configured currency
+- `discord_channel` — Discord channel ID to send price updates to
 
 Optional — only ask if ambiguous or user mentioned them:
+- `alert_days` — compare current price against the average of the last N days (default 7); set lower if user wants a shorter window
 - `cabin` — ECONOMY (default) / BUSINESS / FIRST / PREMIUM_ECONOMY
 - `adults` — integer, default 1
 - `nonstop` — flag, default off
@@ -70,7 +71,8 @@ flight-monitor add \
   --origin PEK \
   --destination LHR \
   --depart-date 2025-06-15 \
-  --target-price 5000 \
+  --discord-channel <channel-id> \
+  --alert-days 7 \
   --flex-days 3 \
   --cabin BUSINESS \
   [--return-date 2025-06-30] \
@@ -83,21 +85,24 @@ Note the `monitor_id` from the JSON output.
 
 ### Register Cron Job
 
+Use the `discord_channel_id` from the `flight-monitor add` output as the `--to` value. This binds the monitor to its channel: every cron run delivers the agent's reply there automatically via `--announce`.
+
 ```bash
 openclaw cron add \
   --name "flight-monitor-<MONITOR_ID>" \
   --every <check_interval> \
   --session isolated \
   --agent kay \
-  --message "Run: flight-monitor check <MONITOR_ID>. If below_target is true in the output, send a notification to the user with the price, flight, and google_flights link." \
+  --message "Run: flight-monitor check <MONITOR_ID>. Then report the current price update (see Step 5 in the flight-monitor skill)." \
   --announce \
-  --to <channel-id-or-user-id>
+  --to <discord_channel_id>
 ```
 
 Flag notes:
 - `--every` takes a bare interval value: `6h`, `1d`, `30m` — no quotes needed
 - `--agent` (not `--agentId`) targets the correct agent for cron-triggered runs
-- `--announce` + `--to` deliver the result to the user; `--to` is required when `--announce` is set
+- `--announce` + `--to` deliver the agent's reply to the Discord channel; `--to` is required when `--announce` is set
+- Never call `openclaw discord send` manually — the `--announce` mechanism handles delivery
 
 Then capture the cron job ID and save it:
 
@@ -114,11 +119,11 @@ flight-monitor set-cron --monitor-id <MONITOR_ID> --cron-id "${CRON_ID}"
 
 🔍 Monitor: fm-abc123
 ✈️  PEK → LHR | 15 Jun ±3 days | Business
-💰 Alert below ¥5,000
-⏰ Checking every 6 hours
+📉 Alert when price drops below 7-day average
+⏰ Checking every 1 day
 📊 Current lowest: ¥6,240 (CA937, 16 Jun)
 
-I'll notify you here when the price drops.
+I'll send price updates to your Discord channel.
 ```
 
 ---
@@ -173,19 +178,39 @@ openclaw cron runs --id <cron_job_id> --limit 10
 When woken by cron with a `flight-monitor check <ID>` instruction:
 
 1. Run `flight-monitor check <MONITOR_ID>`
-2. Read `below_target` from JSON output
-3. **If `true`** → compose and send notification:
+2. **Always** compose and send a reply — the `--announce` flag on the cron job delivers it to the bound Discord channel. Never skip the reply.
+3. Format the reply based on the JSON output:
 
+**If `below_average` is `true`:**
 ```
-✈️ Price Alert!
+✈️ Price Drop Alert!
 PEK → LHR | 16 Jun | Business
 Current lowest: ¥4,820 (CA937)
-🎯 Below your target of ¥5,000!
+📉 Below 7-day average of ¥5,340
 
 Book → <google_flights link>
 ```
 
-4. **If `false`** → do nothing. Never send "price is still high" messages on cron runs.
+**If `below_average` is `false`:**
+```
+✈️ Flight Price Update
+PEK → LHR | 16 Jun | Business
+Current lowest: ¥5,610 (CA937)
+📊 7-day average: ¥5,340 (currently above average)
+
+Book → <google_flights link>
+```
+
+**If `price` is `null` (no flights found):**
+```
+✈️ Flight Price Update
+PEK → LHR | Business
+No flights found for this check — will retry next run.
+```
+
+Notes:
+- `days_in_avg` in the output reflects how many actual data points were averaged (may be less than `alert_days` for a new monitor)
+- When `average_price` is `null` (first ever check), omit the average line and just report the current price
 
 ---
 
