@@ -253,7 +253,7 @@ flights_link() {
 cmd_setup() {
   require_cmd curl jq
 
-  local client_id="" client_secret="" currency="CNY"
+  local client_id="" client_secret="" currency=""
   local install_cli=true bin_path="${INSTALL_BIN}"
 
   while [[ $# -gt 0 ]]; do
@@ -267,8 +267,24 @@ cmd_setup() {
     esac
   done
 
-  [ -z "${client_id}" ]     && die "--client-id is required"
-  [ -z "${client_secret}" ] && die "--client-secret is required"
+  # Load existing config so re-running setup without flags reuses saved credentials
+  if [ -f "${CONFIG_FILE}" ]; then
+    while IFS='=' read -r key val; do
+      [[ "${key}" =~ ^#.*$ || -z "${key}" ]] && continue
+      val="${val%\"}" val="${val#\"}"
+      case "${key}" in
+        AMADEUS_CLIENT_ID)     [ -z "${client_id}" ]     && client_id="${val}" ;;
+        AMADEUS_CLIENT_SECRET) [ -z "${client_secret}" ] && client_secret="${val}" ;;
+        AMADEUS_CURRENCY)      [ -z "${currency}" ]      && currency="${val}" ;;
+      esac
+    done < "${CONFIG_FILE}"
+  fi
+
+  # Fall back to default currency if still unset
+  [ -z "${currency}" ] && currency="CNY"
+
+  [ -z "${client_id}" ]     && die "--client-id is required (or run setup after credentials are already configured)"
+  [ -z "${client_secret}" ] && die "--client-secret is required (or run setup after credentials are already configured)"
 
   ensure_dirs
 
