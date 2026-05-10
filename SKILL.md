@@ -59,7 +59,7 @@ Optional — only ask if ambiguous or user mentioned them:
 - `return_date` — for round trips
 - `airlines` — comma-separated IATA carrier codes (e.g. `CA,CX`)
 - `flex_days` — days ± around depart_date to search (default 0; set 3 if user says "around", "±", "flexible")
-- `check_interval` — how often to poll, default `6h`
+- `check_interval` — how often to poll, default `1d`
 
 **Flexible date signals**: "around June 15", "mid-June", "±3 days", "anytime in June" → set `--flex-days 3` (or as specified).
 
@@ -76,7 +76,7 @@ flight-monitor add \
   [--return-date 2025-06-30] \
   [--nonstop] \
   [--airlines CA,CX] \
-  [--check-interval 6h]
+  [--check-interval 1d]
 ```
 
 Note the `monitor_id` from the JSON output.
