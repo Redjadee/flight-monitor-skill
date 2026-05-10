@@ -183,29 +183,29 @@ When woken by cron with a `flight-monitor check <ID>` instruction:
 
 **If `below_average` is `true`:**
 ```
-✈️ 价格低于近期均值！
+✈️ Price Drop Alert!
 PEK → LHR | 16 Jun | Business
-当前最低: ¥4,820 (CA937)
-📉 低于近 7 日均价 ¥5,340
+Current lowest: ¥4,820 (CA937)
+📉 Below 7-day average of ¥5,340
 
 Book → <google_flights link>
 ```
 
 **If `below_average` is `false`:**
 ```
-✈️ 航班价格播报
+✈️ Flight Price Update
 PEK → LHR | 16 Jun | Business
-当前最低: ¥5,610 (CA937)
-📊 近 7 日均价: ¥5,340（当前偏高）
+Current lowest: ¥5,610 (CA937)
+📊 7-day average: ¥5,340 (currently above average)
 
 Book → <google_flights link>
 ```
 
 **If `price` is `null` (no flights found):**
 ```
-✈️ 航班价格播报
+✈️ Flight Price Update
 PEK → LHR | Business
-暂未找到可用航班，下次再试。
+No flights found for this check — will retry next run.
 ```
 
 Notes:
