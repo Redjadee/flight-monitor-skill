@@ -20,7 +20,9 @@ Monitors flight prices via Amadeus API. Uses the `flight-monitor` CLI (must be i
 |--------|---------|
 | Add monitor | `flight-monitor add ...` → register cron → `flight-monitor set-cron` |
 | List monitors | `flight-monitor list` |
-| Remove monitor | `flight-monitor remove <id>` → cancel cron |
+| View cron job | `openclaw cron show <cron_job_id>` |
+| Edit cron job | `openclaw cron edit <cron_job_id> --message "..."` |
+| Remove monitor | `flight-monitor remove <id>` → `openclaw cron remove <cron_job_id>` |
 | Manual check | `flight-monitor check <id>` |
 
 ---
@@ -57,7 +59,7 @@ Optional — only ask if ambiguous or user mentioned them:
 - `return_date` — for round trips
 - `airlines` — comma-separated IATA carrier codes (e.g. `CA,CX`)
 - `flex_days` — days ± around depart_date to search (default 0; set 3 if user says "around", "±", "flexible")
-- `check_interval` — how often to poll, default `6h`
+- `check_interval` — how often to poll, default `1d`
 
 **Flexible date signals**: "around June 15", "mid-June", "±3 days", "anytime in June" → set `--flex-days 3` (or as specified).
 
@@ -74,7 +76,7 @@ flight-monitor add \
   [--return-date 2025-06-30] \
   [--nonstop] \
   [--airlines CA,CX] \
-  [--check-interval 6h]
+  [--check-interval 1d]
 ```
 
 Note the `monitor_id` from the JSON output.
@@ -84,31 +86,23 @@ Note the `monitor_id` from the JSON output.
 ```bash
 openclaw cron add \
   --name "flight-monitor-<MONITOR_ID>" \
-  --every "<check_interval>" \
+  --every <check_interval> \
   --session isolated \
-  --message "Run: flight-monitor check <MONITOR_ID>. If below_target is true in the output, send a notification to the user with the price, flight, and google_flights link." \
-  --announce
-```
-
-⚠️ **CRITICAL**: The `--announce` flag requires `--to <channel-id-or-user-id>` to be specified. Also always include `--agentId kay` so the cron run reaches the correct agent.
-
-Example:
-```bash
-openclaw cron add \
-  --name "flight-monitor-<MONITOR_ID>" \
-  --every "1d" \
-  --session isolated \
-  --agentId kay \
+  --agent kay \
   --message "Run: flight-monitor check <MONITOR_ID>. If below_target is true in the output, send a notification to the user with the price, flight, and google_flights link." \
   --announce \
   --to <channel-id-or-user-id>
 ```
 
+Flag notes:
+- `--every` takes a bare interval value: `6h`, `1d`, `30m` — no quotes needed
+- `--agent` (not `--agentId`) targets the correct agent for cron-triggered runs
+- `--announce` + `--to` deliver the result to the user; `--to` is required when `--announce` is set
+
 Then capture the cron job ID and save it:
 
 ```bash
-# Get the cron ID (openclaw cron list outputs JSON)
-CRON_ID=$(openclaw cron list | jq -r '.[] | select(.name=="flight-monitor-<MONITOR_ID>") | .id')
+CRON_ID=$(openclaw cron list --json | jq -r '.[] | select(.name=="flight-monitor-<MONITOR_ID>") | .id')
 
 flight-monitor set-cron --monitor-id <MONITOR_ID> --cron-id "${CRON_ID}"
 ```
@@ -139,7 +133,32 @@ Format the JSON as a readable table: ID, route, date/flex, cabin, target, last p
 
 ---
 
-## Step 3 — Removing a Monitor
+## Step 3 — Viewing / Modifying Cron Jobs
+
+**List all cron jobs:**
+```bash
+openclaw cron list
+openclaw cron list --json   # machine-readable output
+```
+
+**Inspect a specific job:**
+```bash
+openclaw cron show <cron_job_id>
+```
+
+**Edit a job's message or model:**
+```bash
+openclaw cron edit <cron_job_id> --message "updated prompt"
+```
+
+**View execution history:**
+```bash
+openclaw cron runs --id <cron_job_id> --limit 10
+```
+
+---
+
+## Step 4 — Removing a Monitor
 
 1. Find the monitor (by ID or by route description)
 2. Get `cron_job_id` from the record
@@ -149,7 +168,7 @@ Format the JSON as a readable table: ID, route, date/flex, cabin, target, last p
 
 ---
 
-## Step 4 — Cron-Triggered Check
+## Step 5 — Cron-Triggered Check
 
 When woken by cron with a `flight-monitor check <ID>` instruction:
 
