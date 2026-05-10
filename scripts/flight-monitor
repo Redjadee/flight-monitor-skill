@@ -1,0 +1,620 @@
+#!/usr/bin/env bash
+# flight-monitor — Amadeus flight price monitor for OpenClaw
+# Commands: setup, add, list, remove, set-cron, check, debug, version
+
+set -euo pipefail
+cd "${HOME}" 2>/dev/null || true
+
+VERSION="1.0.0"
+
+# ─── Paths ────────────────────────────────────────────────────────────────────
+
+FM_DIR="${HOME}/.flight-monitor"
+CONFIG_FILE="${FM_DIR}/config"
+MONITORS_FILE="${FM_DIR}/monitors.json"
+HISTORY_DIR="${FM_DIR}/history"
+TOKEN_CACHE="${FM_DIR}/.token_cache"
+
+AMADEUS_BASE="https://api.amadeus.com"
+INSTALL_BIN="/usr/local/bin/flight-monitor"
+
+# ─── Utilities ────────────────────────────────────────────────────────────────
+
+die()      { printf '{"error":"%s"}\n' "$*" >&2; exit 1; }
+info()     { printf '%s\n' "$*" >&2; }
+now_iso()  { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
+now_epoch(){ date +%s; }
+
+require_cmd() {
+  for cmd in "$@"; do
+    command -v "$cmd" &>/dev/null || die "Required command not found: $cmd"
+  done
+}
+
+gen_id() {
+  if command -v openssl &>/dev/null; then
+    openssl rand -hex 4
+  elif [ -r /dev/urandom ]; then
+    head -c4 /dev/urandom | od -An -tx1 | tr -d ' \n'
+  else
+    printf '%04x%04x' $RANDOM $RANDOM
+  fi
+}
+
+ensure_dirs() {
+  mkdir -p "${FM_DIR}" "${HISTORY_DIR}"
+  [ -f "${MONITORS_FILE}" ] || echo "[]" > "${MONITORS_FILE}"
+}
+
+urlencode() {
+  local s="$1"
+  printf '%s' "${s}" | od -An -tx1 | tr ' ' '\n' | grep -v '^$' | while read -r hex; do
+    case "${hex}" in
+      [0-9a-fA-F][0-9a-fA-F])
+        c=$(printf "\\x${hex}")
+        case "${c}" in
+          [a-zA-Z0-9.~_-]) printf '%s' "${c}" ;;
+          *) printf '%%%s' "${hex^^}" ;;
+        esac
+        ;;
+    esac
+  done
+}
+
+# ─── Credential Loading ───────────────────────────────────────────────────────
+# Credentials stored in ~/.flight-monitor/config (written by setup).
+# Environment variables override config file if already set.
+
+load_credentials() {
+  if [ -f "${CONFIG_FILE}" ]; then
+    while IFS='=' read -r key val; do
+      [[ "${key}" =~ ^#.*$ || -z "${key}" ]] && continue
+      val="${val%\"}" val="${val#\"}"
+      [ -z "${!key:-}" ] && export "${key}=${val}"
+    done < "${CONFIG_FILE}"
+  fi
+  : "${AMADEUS_CLIENT_ID:?Not configured. Run: flight-monitor setup --client-id <id> --client-secret <secret>}"
+  : "${AMADEUS_CLIENT_SECRET:?Not configured. Run: flight-monitor setup --client-id <id> --client-secret <secret>}"
+}
+
+# ─── Amadeus Auth ─────────────────────────────────────────────────────────────
+
+get_token() {
+  if [ -f "${TOKEN_CACHE}" ]; then
+    local cached_token cached_expires
+    cached_token=$(cut -d'|' -f1 "${TOKEN_CACHE}")
+    cached_expires=$(cut -d'|' -f2 "${TOKEN_CACHE}")
+    if [ "$(now_epoch)" -lt $(( cached_expires - 60 )) ]; then
+      echo "${cached_token}"
+      return
+    fi
+  fi
+
+  local resp token expires_in
+  resp=$(curl -sf -X POST \
+    "${AMADEUS_BASE}/v1/security/oauth2/token" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "grant_type=client_credentials&client_id=${AMADEUS_CLIENT_ID}&client_secret=${AMADEUS_CLIENT_SECRET}") \
+    || die "Amadeus auth failed. Check credentials in ${CONFIG_FILE}"
+
+  token=$(echo "${resp}"      | jq -r '.access_token // empty')
+  expires_in=$(echo "${resp}" | jq -r '.expires_in // 1799')
+
+  [ -z "${token}" ] && die "No token in Amadeus response: ${resp}"
+
+  echo "${token}|$(( $(now_epoch) + expires_in ))" > "${TOKEN_CACHE}"
+  echo "${token}"
+}
+
+# ─── Amadeus: Location Resolve ────────────────────────────────────────────────
+
+resolve_iata() {
+  local input="$1" token="$2"
+
+  # Already looks like an IATA code
+  if echo "${input}" | grep -qE '^[A-Z]{3}$'; then
+    echo "${input}"
+    return
+  fi
+
+  local encoded resp iata
+  encoded=$(urlencode "${input}")
+  resp=$(curl -sf \
+    "${AMADEUS_BASE}/v1/reference-data/locations?keyword=${encoded}&subType=CITY,AIRPORT&page%5Blimit%5D=5" \
+    -H "Authorization: Bearer ${token}") \
+    || die "Location lookup failed for: ${input}"
+
+  iata=$(echo "${resp}" | grep -o '"iataCode":"[^"]*"' | head -1 | cut -d'"' -f4)
+  [ -z "${iata}" ] && die "Could not resolve location: ${input}"
+  echo "${iata}"
+}
+
+# ─── Amadeus: Search One Date ─────────────────────────────────────────────────
+
+search_one_date() {
+  local origin="$1" dest="$2" date="$3" token="$4" extra_params="${5:-}"
+
+  local url="${AMADEUS_BASE}/v2/shopping/flight-offers?originLocationCode=${origin}&destinationLocationCode=${dest}&departureDate=${date}${extra_params:+&${extra_params}}"
+
+  local resp
+  resp=$(curl -sf "${url}" -H "Authorization: Bearer ${token}" 2>/dev/null) || return 1
+
+  # Check empty data array
+  local count
+  count=$(echo "${resp}" | jq '.data | length' 2>/dev/null || echo "0")
+  [ "${count}" -eq 0 ] && return 1
+
+  local price carrier flight_num duration
+  price=$(echo "${resp}"      | jq -r '.data[0].price.total // empty')
+  carrier=$(echo "${resp}"    | jq -r '.data[0].itineraries[0].segments[0].carrierCode // empty')
+  flight_num=$(echo "${resp}" | jq -r '.data[0].itineraries[0].segments[0].number // empty')
+  duration=$(echo "${resp}"   | jq -r '.data[0].itineraries[0].duration // empty')
+
+  [ -z "${price}" ] && return 1
+
+  printf '{"date":"%s","price":%s,"carrier":"%s","flight":"%s%s","duration":"%s"}' \
+    "${date}" "${price}" "${carrier}" "${carrier}" "${flight_num}" "${duration}"
+}
+
+# ─── Amadeus: Flexible Date Search ───────────────────────────────────────────
+
+search_flexible() {
+  local monitor_id="$1" token="$2"
+
+  local origin dest depart_date flex_days cabin adults nonstop airlines return_date currency
+  origin=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .origin'                       "${MONITORS_FILE}")
+  dest=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .destination'                    "${MONITORS_FILE}")
+  depart_date=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .depart_date'             "${MONITORS_FILE}")
+  flex_days=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .flex_days'                 "${MONITORS_FILE}")
+  cabin=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .cabin'                         "${MONITORS_FILE}")
+  adults=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .adults'                       "${MONITORS_FILE}")
+  nonstop=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .nonstop'                     "${MONITORS_FILE}")
+  airlines=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .airlines | join(",")'       "${MONITORS_FILE}")
+  return_date=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .return_date // ""'       "${MONITORS_FILE}")
+  currency=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .currency'                   "${MONITORS_FILE}")
+
+  local params="adults=${adults}&travelClass=${cabin}&currencyCode=${currency}&max=5"
+  [ "${nonstop}" = "true" ] && params="${params}&nonStop=true"
+  [ -n "${airlines}" ]      && params="${params}&includedAirlineCodes=${airlines}"
+  [ -n "${return_date}" ]   && params="${params}&returnDate=${return_date}"
+
+  [ "${flex_days}" -gt 7 ] && flex_days=7
+
+  local base_epoch today_epoch
+  base_epoch=$(date -d "${depart_date}" +%s 2>/dev/null || date -j -f "%Y-%m-%d" "${depart_date}" +%s)
+  today_epoch=$(now_epoch)
+
+  local best_price="" best_offer=""
+
+  for offset in $(seq "-${flex_days}" "${flex_days}"); do
+    local check_epoch check_date
+    check_epoch=$(( base_epoch + offset * 86400 ))
+    [ "${check_epoch}" -lt "${today_epoch}" ] && continue
+    check_date=$(date -d "@${check_epoch}" +%Y-%m-%d 2>/dev/null || date -r "${check_epoch}" +%Y-%m-%d)
+
+    local offer
+    offer=$(search_one_date "${origin}" "${dest}" "${check_date}" "${token}" "${params}") || { sleep 0.5; continue; }
+
+    local offer_price
+    offer_price=$(echo "${offer}" | jq -r '.price')
+
+    local is_better=false
+    [ -z "${best_price}" ] && is_better=true
+    if [ "${is_better}" = false ]; then
+      awk "BEGIN{exit!(${offer_price}<${best_price})}" && is_better=true || true
+    fi
+    if [ "${is_better}" = true ]; then
+      best_price="${offer_price}"
+      best_offer="${offer}"
+    fi
+    sleep 0.5
+  done
+
+  [ -z "${best_offer}" ] && return 1
+  echo "${best_offer}"
+}
+
+# ─── History ──────────────────────────────────────────────────────────────────
+
+append_history() {
+  local monitor_id="$1" offer="$2"
+  local hist_file="${HISTORY_DIR}/${monitor_id}.csv"
+
+  [ -f "${hist_file}" ] || echo "timestamp,date,price,currency,carrier,flight,duration" > "${hist_file}"
+
+  local date price carrier flight duration currency
+  date=$(echo "${offer}"     | jq -r '.date')
+  price=$(echo "${offer}"    | jq -r '.price')
+  carrier=$(echo "${offer}"  | jq -r '.carrier')
+  flight=$(echo "${offer}"   | jq -r '.flight')
+  duration=$(echo "${offer}" | jq -r '.duration')
+  currency=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .currency' "${MONITORS_FILE}")
+
+  printf '%s,%s,%s,%s,%s,%s,%s\n' \
+    "$(now_iso)" "${date}" "${price}" "${currency}" "${carrier}" "${flight}" "${duration}" \
+    >> "${hist_file}"
+}
+
+# ─── Google Flights Link ──────────────────────────────────────────────────────
+
+flights_link() {
+  local origin="$1" dest="$2" date="$3" cabin="$4"
+  local cabin_code="e"
+  case "${cabin}" in
+    PREMIUM_ECONOMY) cabin_code="p" ;;
+    BUSINESS)        cabin_code="j" ;;
+    FIRST)           cabin_code="f" ;;
+  esac
+  echo "https://www.google.com/flights#flt=${origin}.${dest}.${date};c:${cabin_code};e:1"
+}
+
+# ─── CMD: setup ───────────────────────────────────────────────────────────────
+
+cmd_setup() {
+  require_cmd curl jq
+
+  local client_id="" client_secret="" currency="CNY"
+  local install_cli=true bin_path="${INSTALL_BIN}"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --client-id)     client_id="$2";     shift 2 ;;
+      --client-secret) client_secret="$2"; shift 2 ;;
+      --currency)      currency="$2";      shift 2 ;;
+      --bin-path)      bin_path="$2";      shift 2 ;;
+      --no-install)    install_cli=false;  shift   ;;
+      *) die "Unknown option: $1" ;;
+    esac
+  done
+
+  [ -z "${client_id}" ]     && die "--client-id is required"
+  [ -z "${client_secret}" ] && die "--client-secret is required"
+
+  ensure_dirs
+
+  # 1. Validate credentials
+  info "Validating Amadeus credentials..."
+  AMADEUS_CLIENT_ID="${client_id}" AMADEUS_CLIENT_SECRET="${client_secret}" \
+    get_token > /dev/null || die "Credential validation failed."
+  info "  ✓ Credentials valid"
+
+  # 2. Write config
+  cat > "${CONFIG_FILE}" <<EOF
+AMADEUS_CLIENT_ID="${client_id}"
+AMADEUS_CLIENT_SECRET="${client_secret}"
+AMADEUS_CURRENCY="${currency}"
+EOF
+  chmod 600 "${CONFIG_FILE}"
+  info "  ✓ Config written to ${CONFIG_FILE}"
+
+  # 3. Install CLI globally
+  if [ "${install_cli}" = true ]; then
+    local self="${BASH_SOURCE[0]}"
+    [[ "${self}" != /* ]] && self="${PWD}/${self}"
+    self="$(readlink -f "${self}" 2>/dev/null || echo "${self}")"
+    info "Installing flight-monitor CLI to ${bin_path}..."
+    if cp "${self}" "${bin_path}" && chmod +x "${bin_path}"; then
+      info "  ✓ Installed to ${bin_path}"
+    else
+      info "  ✗ Permission denied. Retrying with sudo..."
+      sudo cp "${self}" "${bin_path}" && sudo chmod +x "${bin_path}" \
+        && info "  ✓ Installed to ${bin_path} (via sudo)" \
+        || info "  ✗ Could not install. Add $(dirname "${self}") to your PATH manually."
+    fi
+  fi
+
+  printf '{"status":"ok","message":"flight-monitor ready","config":"%s"}\n' "${CONFIG_FILE}"
+}
+
+# ─── CMD: add ─────────────────────────────────────────────────────────────────
+
+cmd_add() {
+  require_cmd curl jq
+
+  local origin="" dest="" depart_date="" target_price=""
+  local flex_days=0 return_date="" cabin="ECONOMY" adults=1
+  local nonstop=false airlines="" check_interval="6h"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --origin)         origin="$2";         shift 2 ;;
+      --destination)    dest="$2";           shift 2 ;;
+      --depart-date)    depart_date="$2";    shift 2 ;;
+      --target-price)   target_price="$2";   shift 2 ;;
+      --flex-days)      flex_days="$2";      shift 2 ;;
+      --return-date)    return_date="$2";    shift 2 ;;
+      --cabin)          cabin="${2^^}";      shift 2 ;;
+      --adults)         adults="$2";         shift 2 ;;
+      --nonstop)        nonstop=true;        shift   ;;
+      --airlines)       airlines="$2";       shift 2 ;;
+      --check-interval) check_interval="$2"; shift 2 ;;
+      *) die "Unknown option: $1" ;;
+    esac
+  done
+
+  [ -z "${origin}" ]       && die "--origin is required"
+  [ -z "${dest}" ]         && die "--destination is required"
+  [ -z "${depart_date}" ]  && die "--depart-date is required"
+  [ -z "${target_price}" ] && die "--target-price is required"
+
+  load_credentials
+  ensure_dirs
+
+  local token
+  token=$(get_token)
+
+  origin=$(resolve_iata "${origin}" "${token}")
+  dest=$(resolve_iata "${dest}" "${token}")
+
+  local monitor_id="fm-$(gen_id)"
+  local currency="${AMADEUS_CURRENCY:-CNY}"
+
+  local airlines_json="[]"
+  if [ -n "${airlines}" ]; then
+    airlines_json=$(echo "${airlines}" | tr ',' '\n' | jq -Rn '[inputs]')
+  fi
+
+  local tmp
+  tmp=$(mktemp)
+  jq --arg id "${monitor_id}" \
+     --arg origin "${origin}" \
+     --arg dest "${dest}" \
+     --arg depart_date "${depart_date}" \
+     --argjson flex_days "${flex_days}" \
+     --arg return_date "${return_date}" \
+     --arg cabin "${cabin}" \
+     --argjson adults "${adults}" \
+     --argjson nonstop "${nonstop}" \
+     --argjson airlines "${airlines_json}" \
+     --argjson target_price "${target_price}" \
+     --arg currency "${currency}" \
+     --arg interval "${check_interval}" \
+     --arg ts "$(now_iso)" \
+     '. + [{
+       id: $id, origin: $origin, destination: $dest,
+       depart_date: $depart_date, flex_days: $flex_days,
+       return_date: (if $return_date == "" then null else $return_date end),
+       cabin: $cabin, adults: $adults, nonstop: $nonstop, airlines: $airlines,
+       target_price: $target_price, currency: $currency, check_interval: $interval,
+       cron_job_id: null, status: "active", created_at: $ts,
+       last_checked: null, last_price: null, last_flight: null
+     }]' "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
+
+  local offer below="false" link=""
+  if offer=$(search_flexible "${monitor_id}" "${token}"); then
+    append_history "${monitor_id}" "${offer}"
+
+    local offer_price offer_flight offer_date
+    offer_price=$(echo "${offer}"  | jq -r '.price')
+    offer_flight=$(echo "${offer}" | jq -r '.flight')
+    offer_date=$(echo "${offer}"   | jq -r '.date')
+
+    tmp=$(mktemp)
+    jq --arg id "${monitor_id}" \
+       --argjson price "${offer_price}" \
+       --arg flight "${offer_flight}" \
+       --arg ts "$(now_iso)" \
+       'map(if .id == $id then .last_price = $price | .last_flight = $flight | .last_checked = $ts else . end)' \
+       "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
+
+    awk "BEGIN{exit!(${offer_price}<${target_price})}" && below="true" || true
+    link=$(flights_link "${origin}" "${dest}" "${offer_date}" "${cabin}")
+  else
+    offer="null"
+  fi
+
+  printf '{"status":"ok","monitor_id":"%s","current_offer":%s,"below_target":%s,"google_flights":"%s"}\n' \
+    "${monitor_id}" "${offer:-null}" "${below}" "${link}"
+}
+
+# ─── CMD: list ────────────────────────────────────────────────────────────────
+
+cmd_list() {
+  ensure_dirs
+  jq '.' "${MONITORS_FILE}"
+}
+
+# ─── CMD: remove ──────────────────────────────────────────────────────────────
+
+cmd_remove() {
+  local monitor_id="${1:-}"
+  [ -z "${monitor_id}" ] && die "Usage: flight-monitor remove <monitor-id>"
+
+  ensure_dirs
+
+  local cron_id
+  cron_id=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .cron_job_id // ""' "${MONITORS_FILE}")
+
+  local tmp
+  tmp=$(mktemp)
+  jq --arg id "${monitor_id}" 'map(select(.id != $id))' "${MONITORS_FILE}" > "${tmp}" \
+    && mv "${tmp}" "${MONITORS_FILE}"
+
+  printf '{"status":"ok","removed":"%s","cron_job_id":"%s"}\n' "${monitor_id}" "${cron_id}"
+}
+
+# ─── CMD: set-cron ────────────────────────────────────────────────────────────
+
+cmd_set_cron() {
+  local monitor_id="" cron_id=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --monitor-id) monitor_id="$2"; shift 2 ;;
+      --cron-id)    cron_id="$2";    shift 2 ;;
+      *) die "Unknown option: $1" ;;
+    esac
+  done
+
+  [ -z "${monitor_id}" ] && die "--monitor-id is required"
+  [ -z "${cron_id}" ]    && die "--cron-id is required"
+
+  ensure_dirs
+
+  local tmp
+  tmp=$(mktemp)
+  jq --arg id "${monitor_id}" --arg cron "${cron_id}" \
+    'map(if .id == $id then .cron_job_id = $cron else . end)' \
+    "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
+
+  printf '{"status":"ok","monitor_id":"%s","cron_job_id":"%s"}\n' "${monitor_id}" "${cron_id}"
+}
+
+# ─── CMD: check ───────────────────────────────────────────────────────────────
+
+cmd_check() {
+  local monitor_id="${1:-}"
+  [ -z "${monitor_id}" ] && die "Usage: flight-monitor check <monitor-id>"
+
+  load_credentials
+  ensure_dirs
+
+  local status
+  status=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .status' "${MONITORS_FILE}")
+  [ -z "${status}" ]          && die "Monitor not found: ${monitor_id}"
+  [ "${status}" != "active" ] && printf '{"status":"skipped","reason":"monitor is not active"}\n' && exit 0
+
+  local token
+  token=$(get_token)
+
+  local offer
+  if ! offer=$(search_flexible "${monitor_id}" "${token}"); then
+    printf '{"status":"ok","monitor_id":"%s","below_target":false,"price":null,"offer":null}\n' "${monitor_id}"
+    exit 0
+  fi
+
+  append_history "${monitor_id}" "${offer}"
+
+  local offer_price offer_flight target_price below="false"
+  offer_price=$(echo "${offer}"  | jq -r '.price')
+  offer_flight=$(echo "${offer}" | jq -r '.flight')
+  target_price=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .target_price' "${MONITORS_FILE}")
+
+  awk "BEGIN{exit!(${offer_price}<${target_price})}" && below="true" || true
+
+  local tmp
+  tmp=$(mktemp)
+  jq --arg id "${monitor_id}" \
+     --argjson price "${offer_price}" \
+     --arg flight "${offer_flight}" \
+     --arg ts "$(now_iso)" \
+     'map(if .id == $id then .last_price = $price | .last_flight = $flight | .last_checked = $ts else . end)' \
+     "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
+
+  local origin dest cabin offer_date link
+  origin=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .origin'      "${MONITORS_FILE}")
+  dest=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .destination'   "${MONITORS_FILE}")
+  cabin=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .cabin'        "${MONITORS_FILE}")
+  offer_date=$(echo "${offer}" | jq -r '.date')
+  link=$(flights_link "${origin}" "${dest}" "${offer_date}" "${cabin}")
+
+  printf '{"status":"ok","monitor_id":"%s","below_target":%s,"price":%s,"target_price":%s,"offer":%s,"google_flights":"%s"}\n' \
+    "${monitor_id}" "${below}" "${offer_price}" "${target_price}" "${offer}" "${link}"
+}
+
+# ─── CMD: debug ───────────────────────────────────────────────────────────────
+
+cmd_debug() {
+  local origin="${1:-PEK}" dest="${2:-LAX}" date="${3:-}"
+  [ -z "${date}" ] && date=$(date -d "+30 days" +%Y-%m-%d 2>/dev/null || date -v+30d +%Y-%m-%d)
+
+  load_credentials
+  ensure_dirs
+
+  info "=== flight-monitor debug ==="
+  info "Origin:      ${origin}"
+  info "Destination: ${dest}"
+  info "Date:        ${date}"
+  info ""
+
+  # Step 1: Auth
+  info "--- Step 1: Amadeus token ---"
+  local token_resp token expires_in
+  token_resp=$(curl -sf -X POST \
+    "${AMADEUS_BASE}/v1/security/oauth2/token" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "grant_type=client_credentials&client_id=${AMADEUS_CLIENT_ID}&client_secret=${AMADEUS_CLIENT_SECRET}" 2>&1) || {
+    info "FAILED: curl error"
+    echo "${token_resp}"
+    exit 1
+  }
+
+  token=$(echo "${token_resp}"      | jq -r '.access_token // empty')
+  expires_in=$(echo "${token_resp}" | jq -r '.expires_in // 1799')
+
+  if [ -z "${token}" ]; then
+    info "FAILED: no token in response:"
+    echo "${token_resp}"
+    exit 1
+  fi
+  info "OK — token: ${token:0:12}... (expires in ${expires_in}s)"
+  info ""
+
+  # Step 2: Raw flight search
+  info "--- Step 2: Flight Offers Search ---"
+  local url="${AMADEUS_BASE}/v2/shopping/flight-offers?originLocationCode=${origin}&destinationLocationCode=${dest}&departureDate=${date}&adults=1&max=3&currencyCode=CNY"
+  info "URL: ${url}"
+  info ""
+
+  local resp http_code
+  resp=$(curl -s -w "\n__HTTP_CODE__:%{http_code}" "${url}" \
+    -H "Authorization: Bearer ${token}")
+
+  http_code=$(echo "${resp}" | grep -o '__HTTP_CODE__:[0-9]*' | cut -d: -f2)
+  resp=$(echo "${resp}" | sed 's/__HTTP_CODE__:[0-9]*//')
+
+  info "HTTP status: ${http_code}"
+  info ""
+  echo "${resp}" | jq '.' 2>/dev/null || echo "${resp}"
+}
+
+# ─── CMD: version ─────────────────────────────────────────────────────────────
+
+cmd_version() { echo "flight-monitor ${VERSION}"; }
+
+# ─── Usage ────────────────────────────────────────────────────────────────────
+
+usage() {
+  cat <<EOF
+flight-monitor ${VERSION} — Amadeus flight price monitor for OpenClaw
+
+Usage:
+  flight-monitor setup      --client-id <id> --client-secret <secret>
+                            [--currency CNY] [--bin-path /usr/local/bin/flight-monitor]
+                            [--no-install]
+
+  flight-monitor add        --origin <IATA|city> --destination <IATA|city>
+                            --depart-date <YYYY-MM-DD> --target-price <number>
+                            [--flex-days 3] [--return-date <YYYY-MM-DD>]
+                            [--cabin ECONOMY|BUSINESS|FIRST|PREMIUM_ECONOMY]
+                            [--adults 1] [--nonstop] [--airlines CA,CX]
+                            [--check-interval 6h]
+
+  flight-monitor list
+  flight-monitor remove     <monitor-id>
+  flight-monitor set-cron   --monitor-id <id> --cron-id <cron-job-id>
+  flight-monitor check      <monitor-id>
+  flight-monitor debug      [<origin> <destination> <YYYY-MM-DD>]
+  flight-monitor version
+
+Data: ~/.flight-monitor/
+EOF
+}
+
+# ─── Entrypoint ───────────────────────────────────────────────────────────────
+
+CMD="${1:-}"
+[ -z "${CMD}" ] && usage && exit 0
+shift
+
+case "${CMD}" in
+  setup)    cmd_setup "$@" ;;
+  add)      cmd_add "$@" ;;
+  list)     cmd_list ;;
+  remove)   cmd_remove "$@" ;;
+  set-cron) cmd_set_cron "$@" ;;
+  check)    cmd_check "$@" ;;
+  debug)    cmd_debug "$@" ;;
+  version)  cmd_version ;;
+  -h|--help|help) usage ;;
+  *) die "Unknown command: ${CMD}. Run 'flight-monitor help'" ;;
+esac
