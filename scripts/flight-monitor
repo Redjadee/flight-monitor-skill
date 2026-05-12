@@ -146,7 +146,7 @@ search_one_date() {
   [ "${count}" -eq 0 ] && return 1
 
   local price carrier flight_num duration
-  price=$(echo "${resp}"      | jq -r '.data[0].price.total // empty')
+  price=$(echo "${resp}"      | jq -r '(.data[0].price.grandTotal // .data[0].price.total) // empty')
   carrier=$(echo "${resp}"    | jq -r '.data[0].itineraries[0].segments[0].carrierCode // empty')
   flight_num=$(echo "${resp}" | jq -r '.data[0].itineraries[0].segments[0].number // empty')
   duration=$(echo "${resp}"   | jq -r '.data[0].itineraries[0].duration // empty')
