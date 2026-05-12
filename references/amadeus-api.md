@@ -45,7 +45,7 @@ Authorization: Bearer <token>
 Offers are returned sorted cheapest first. From `data[0]`:
 
 ```
-price      → data[0].price.total (string, cast to float)
+price      → data[0].price.grandTotal (includes all taxes/fees; falls back to data[0].price.total)
 carrier    → data[0].itineraries[0].segments[0].carrierCode
 flight_num → carrierCode + data[0].itineraries[0].segments[0].number
 duration   → data[0].itineraries[0].duration
