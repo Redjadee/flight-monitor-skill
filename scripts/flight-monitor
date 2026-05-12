@@ -384,6 +384,12 @@ cmd_add() {
   [ -z "${depart_date}" ]     && die "--depart-date is required"
   [ -z "${discord_channel}" ] && die "--discord-channel is required"
 
+  local add_base_epoch add_today
+  add_base_epoch=$(date -d "${depart_date}" +%s 2>/dev/null || date -j -f "%Y-%m-%d" "${depart_date}" +%s) \
+    || die "--depart-date '${depart_date}' is not a valid date (expected YYYY-MM-DD)"
+  add_today=$(now_epoch)
+  [ "${add_base_epoch}" -lt "${add_today}" ] && die "--depart-date ${depart_date} is in the past"
+
   load_credentials
   ensure_dirs
 
@@ -470,6 +476,10 @@ cmd_remove() {
 
   ensure_dirs
 
+  local exists
+  exists=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .id' "${MONITORS_FILE}")
+  [ -z "${exists}" ] && die "Monitor not found: ${monitor_id}"
+
   local cron_id
   cron_id=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .cron_job_id // ""' "${MONITORS_FILE}")
 
@@ -498,6 +508,10 @@ cmd_set_cron() {
 
   ensure_dirs
 
+  local exists
+  exists=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .id' "${MONITORS_FILE}")
+  [ -z "${exists}" ] && die "Monitor not found: ${monitor_id}"
+
   local tmp
   tmp=$(mktemp)
   jq --arg id "${monitor_id}" --arg cron "${cron_id}" \
@@ -513,8 +527,13 @@ calc_average_price() {
   local monitor_id="$1" days="$2"
   local hist_file="${HISTORY_DIR}/${monitor_id}.csv"
   [ -f "${hist_file}" ] || return 1
+  # Compute the ISO timestamp for N days ago and filter rows by the timestamp column (col 1)
+  local cutoff
+  cutoff=$(date -u -d "-${days} days" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null \
+        || date -u -v-"${days}"d +"%Y-%m-%dT%H:%M:%SZ")
   local prices
-  prices=$(tail -n "+2" "${hist_file}" | tail -n "${days}" | cut -d',' -f3 | grep -E '^[0-9]+(\.[0-9]+)?$')
+  prices=$(tail -n "+2" "${hist_file}" | awk -F',' -v cutoff="${cutoff}" '$1 >= cutoff {print $3}' \
+           | grep -E '^[0-9]+(\.[0-9]+)?$')
   [ -z "${prices}" ] && return 1
   echo "${prices}" | awk '{sum+=$1; count++} END{if(count>0) printf "%.2f", sum/count; else exit 1}'
 }
@@ -578,9 +597,7 @@ cmd_check() {
 
   local average_price below_average="false" days_in_avg="null"
   if average_price=$(calc_average_price "${monitor_id}" "${alert_days}"); then
-    local hist_count
-    hist_count=$(tail -n "+2" "${HISTORY_DIR}/${monitor_id}.csv" | wc -l | tr -d ' ')
-    days_in_avg=$(( hist_count < alert_days ? hist_count : alert_days ))
+    days_in_avg="${alert_days}"
     awk "BEGIN{exit!(${offer_price}<${average_price})}" && below_average="true" || true
   else
     average_price="null"
@@ -637,7 +654,8 @@ cmd_debug() {
 
   # Step 2: Raw flight search
   info "--- Step 2: Flight Offers Search ---"
-  local url="${AMADEUS_BASE}/v2/shopping/flight-offers?originLocationCode=${origin}&destinationLocationCode=${dest}&departureDate=${date}&adults=1&max=3&currencyCode=CNY"
+  local debug_currency="${AMADEUS_CURRENCY:-CNY}"
+  local url="${AMADEUS_BASE}/v2/shopping/flight-offers?originLocationCode=${origin}&destinationLocationCode=${dest}&departureDate=${date}&adults=1&max=3&currencyCode=${debug_currency}"
   info "URL: ${url}"
   info ""
 
