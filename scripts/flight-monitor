@@ -443,20 +443,23 @@ cmd_add() {
 
   local offer link=""
   if offer=$(search_flexible "${monitor_id}" "${token}"); then
-    append_history "${monitor_id}" "${offer}"
+    local offer_price offer_flight offer_date offer_fallback
+    offer_price=$(echo "${offer}"    | jq -r '.price')
+    offer_flight=$(echo "${offer}"   | jq -r '.flight')
+    offer_date=$(echo "${offer}"     | jq -r '.date')
+    offer_fallback=$(echo "${offer}" | jq -r '.fallback // false')
 
-    local offer_price offer_flight offer_date
-    offer_price=$(echo "${offer}"  | jq -r '.price')
-    offer_flight=$(echo "${offer}" | jq -r '.flight')
-    offer_date=$(echo "${offer}"   | jq -r '.date')
-
-    tmp=$(mktemp)
-    jq --arg id "${monitor_id}" \
-       --argjson price "${offer_price}" \
-       --arg flight "${offer_flight}" \
-       --arg ts "$(now_iso)" \
-       'map(if .id == $id then .last_price = $price | .last_flight = $flight | .last_checked = $ts else . end)' \
-       "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
+    # Only write history and last_price for cabin-accurate (non-fallback) results
+    if [ "${offer_fallback}" = "false" ]; then
+      append_history "${monitor_id}" "${offer}"
+      tmp=$(mktemp)
+      jq --arg id "${monitor_id}" \
+         --argjson price "${offer_price}" \
+         --arg flight "${offer_flight}" \
+         --arg ts "$(now_iso)" \
+         'map(if .id == $id then .last_price = $price | .last_flight = $flight | .last_checked = $ts else . end)' \
+         "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
+    fi
 
     link=$(flights_link "${origin}" "${dest}" "${offer_date}" "${cabin}")
   else
@@ -576,7 +579,7 @@ cmd_check() {
   latest_candidate=$(( base_epoch + capped_flex * 86400 ))
   if [ "${latest_candidate}" -lt "${today_epoch}" ]; then
     printf '{"status":"expired","monitor_id":"%s","discord_channel_id":"%s","reason":"depart_date %s (+/-%s days) is in the past — update the monitor with a future date"}\n' \
-      "${monitor_id}" "${discord_channel_id}" "${depart_date}" "${flex_days}"
+      "${monitor_id}" "${discord_channel_id}" "${depart_date}" "${capped_flex}"
     exit 0
   fi
 
@@ -605,8 +608,23 @@ cmd_check() {
 
   # Fallback offers (any-cabin) are not written to history to avoid polluting
   # the cabin-specific price baseline used for average comparisons.
+  # last_price / last_flight / last_checked are only updated for non-fallback results
+  # so that `list` always reflects a cabin-accurate price.
+  local tmp
+  tmp=$(mktemp)
   if [ "${offer_fallback}" = "false" ]; then
     append_history "${monitor_id}" "${offer}"
+    jq --arg id "${monitor_id}" \
+       --argjson price "${offer_price}" \
+       --arg flight "${offer_flight}" \
+       --arg ts "$(now_iso)" \
+       'map(if .id == $id then .last_price = $price | .last_flight = $flight | .last_checked = $ts else . end)' \
+       "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
+  else
+    jq --arg id "${monitor_id}" \
+       --arg ts "$(now_iso)" \
+       'map(if .id == $id then .last_checked = $ts else . end)' \
+       "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
   fi
 
   local origin dest cabin offer_date link
