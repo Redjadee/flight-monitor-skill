@@ -597,8 +597,10 @@ cmd_check() {
 
   # Calculate average from history BEFORE appending current price, so the
   # current offer is not included in the baseline it is being compared against.
+  # Skip comparison entirely for fallback offers: comparing an any-cabin price
+  # against a cabin-specific average produces meaningless results.
   local average_price below_average="null" days_in_avg="null"
-  if average_price=$(calc_average_price "${monitor_id}" "${alert_days}"); then
+  if [ "${offer_fallback}" = "false" ] && average_price=$(calc_average_price "${monitor_id}" "${alert_days}"); then
     days_in_avg="${alert_days}"
     below_average="false"
     awk "BEGIN{exit!(${offer_price}<${average_price})}" && below_average="true" || true
