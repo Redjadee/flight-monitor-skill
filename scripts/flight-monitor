@@ -469,15 +469,21 @@ cmd_add() {
     offer_date=$(echo "${offer}"     | jq -r '.date')
     offer_fallback=$(echo "${offer}" | jq -r '.fallback // false')
 
-    # Only write history and last_price for cabin-accurate (non-fallback) results
+    # Only write history and last_price for cabin-accurate (non-fallback) results.
+    # Always update last_checked so `list` reflects that the initial scan ran.
+    tmp=$(mktemp)
     if [ "${offer_fallback}" = "false" ]; then
       append_history "${monitor_id}" "${offer}"
-      tmp=$(mktemp)
       jq --arg id "${monitor_id}" \
          --argjson price "${offer_price}" \
          --arg flight "${offer_flight}" \
          --arg ts "$(now_iso)" \
          'map(if .id == $id then .last_price = $price | .last_flight = $flight | .last_checked = $ts else . end)' \
+         "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
+    else
+      jq --arg id "${monitor_id}" \
+         --arg ts "$(now_iso)" \
+         'map(if .id == $id then .last_checked = $ts else . end)' \
          "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
     fi
 
@@ -605,7 +611,7 @@ cmd_check() {
 
   local offer
   if ! offer=$(search_flexible "${monitor_id}" "${token}"); then
-    printf '{"status":"ok","monitor_id":"%s","discord_channel_id":"%s","price":null,"average_price":null,"days_in_avg":null,"below_average":null,"offer":null}\n' \
+    printf '{"status":"ok","monitor_id":"%s","discord_channel_id":"%s","price":null,"average_price":null,"days_in_avg":null,"below_average":null,"fallback_price":null,"offer":null,"google_flights":null}\n' \
       "${monitor_id}" "${discord_channel_id}"
     exit 0
   fi
