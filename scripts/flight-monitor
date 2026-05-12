@@ -176,10 +176,11 @@ search_flexible() {
   return_date=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .return_date // ""'       "${MONITORS_FILE}")
   currency=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .currency'                   "${MONITORS_FILE}")
 
-  local params="adults=${adults}&travelClass=${cabin}&currencyCode=${currency}&max=5"
-  [ "${nonstop}" = "true" ] && params="${params}&nonStop=true"
-  [ -n "${airlines}" ]      && params="${params}&includedAirlineCodes=${airlines}"
-  [ -n "${return_date}" ]   && params="${params}&returnDate=${return_date}"
+  # returnDate is NOT added to the global params — it shifts with each offset so
+  # that the trip duration stays constant across all flex candidates.
+  local params_base="adults=${adults}&travelClass=${cabin}&currencyCode=${currency}&max=5"
+  [ "${nonstop}" = "true" ] && params_base="${params_base}&nonStop=true"
+  [ -n "${airlines}" ]      && params_base="${params_base}&includedAirlineCodes=${airlines}"
 
   [ "${flex_days}" -gt 7 ] && flex_days=7
 
@@ -197,12 +198,23 @@ search_flexible() {
     local check_epoch check_date
     check_epoch=$(( base_epoch + offset * 86400 ))
     [ "${check_epoch}" -lt "${today_epoch}" ] && continue
-    # Skip dates that would land on or after return_date (invalid round-trip range)
-    [ "${return_epoch}" -gt 0 ] && [ "${check_epoch}" -ge "${return_epoch}" ] && continue
     check_date=$(date -d "@${check_epoch}" +%Y-%m-%d 2>/dev/null || date -r "${check_epoch}" +%Y-%m-%d)
 
+    # Shift return_date by the same offset to preserve trip duration
+    local iter_params="${params_base}"
+    if [ "${return_epoch}" -gt 0 ]; then
+      local iter_return_date
+      iter_return_date=$(date -d "@$(( return_epoch + offset * 86400 ))" +%Y-%m-%d 2>/dev/null \
+                      || date -r "$(( return_epoch + offset * 86400 ))" +%Y-%m-%d)
+      iter_params="${iter_params}&returnDate=${iter_return_date}"
+    fi
+
     local offer
-    offer=$(search_one_date "${origin}" "${dest}" "${check_date}" "${token}" "${params}") || { sleep 0.5; continue; }
+    offer=$(search_one_date "${origin}" "${dest}" "${check_date}" "${token}" "${iter_params}") || { sleep 0.5; continue; }
+
+    # Embed the per-offset return_date so callers can build the correct Google Flights link
+    [ "${return_epoch}" -gt 0 ] && \
+      offer=$(echo "${offer}" | jq -c --arg rd "${iter_return_date}" '. + {"return_date": $rd}')
 
     local offer_price
     offer_price=$(echo "${offer}" | jq -r '.price')
@@ -222,17 +234,26 @@ search_flexible() {
   # Fallback: if all attempts failed with full params, retry with minimal params
   # (strips travelClass / nonStop / airlines which can cause empty results)
   if [ -z "${best_offer}" ]; then
-    local fallback_params="adults=${adults}&currencyCode=${currency}&max=5"
-    [ -n "${return_date}" ] && fallback_params="${fallback_params}&returnDate=${return_date}"
+    local fallback_params_base="adults=${adults}&currencyCode=${currency}&max=5"
     for offset in $(seq "-${flex_days}" "${flex_days}"); do
       local fb_epoch fb_date
       fb_epoch=$(( base_epoch + offset * 86400 ))
       [ "${fb_epoch}" -lt "${today_epoch}" ] && continue
-      [ "${return_epoch}" -gt 0 ] && [ "${fb_epoch}" -ge "${return_epoch}" ] && continue
       fb_date=$(date -d "@${fb_epoch}" +%Y-%m-%d 2>/dev/null || date -r "${fb_epoch}" +%Y-%m-%d)
 
+      local fb_iter_params="${fallback_params_base}"
+      if [ "${return_epoch}" -gt 0 ]; then
+        local fb_return_date
+        fb_return_date=$(date -d "@$(( return_epoch + offset * 86400 ))" +%Y-%m-%d 2>/dev/null \
+                      || date -r "$(( return_epoch + offset * 86400 ))" +%Y-%m-%d)
+        fb_iter_params="${fb_iter_params}&returnDate=${fb_return_date}"
+      fi
+
       local fb_offer
-      fb_offer=$(search_one_date "${origin}" "${dest}" "${fb_date}" "${token}" "${fallback_params}") || { sleep 0.5; continue; }
+      fb_offer=$(search_one_date "${origin}" "${dest}" "${fb_date}" "${token}" "${fb_iter_params}") || { sleep 0.5; continue; }
+
+      [ "${return_epoch}" -gt 0 ] && \
+        fb_offer=$(echo "${fb_offer}" | jq -c --arg rd "${fb_return_date}" '. + {"return_date": $rd}')
 
       local fb_price
       fb_price=$(echo "${fb_offer}" | jq -r '.price')
@@ -487,7 +508,9 @@ cmd_add() {
          "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
     fi
 
-    link=$(flights_link "${origin}" "${dest}" "${offer_date}" "${cabin}" "${return_date}")
+    local offer_return_date
+    offer_return_date=$(echo "${offer}" | jq -r '.return_date // ""')
+    link=$(flights_link "${origin}" "${dest}" "${offer_date}" "${cabin}" "${offer_return_date}")
   else
     offer="null"
   fi
@@ -655,13 +678,13 @@ cmd_check() {
        "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
   fi
 
-  local origin dest cabin offer_date link monitor_return_date
-  origin=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .origin'               "${MONITORS_FILE}")
-  dest=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .destination'            "${MONITORS_FILE}")
-  cabin=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .cabin'                 "${MONITORS_FILE}")
-  monitor_return_date=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .return_date // ""' "${MONITORS_FILE}")
+  local origin dest cabin offer_date offer_return_date link
+  origin=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .origin'      "${MONITORS_FILE}")
+  dest=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .destination'   "${MONITORS_FILE}")
+  cabin=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .cabin'        "${MONITORS_FILE}")
   offer_date=$(echo "${offer}" | jq -r '.date')
-  link=$(flights_link "${origin}" "${dest}" "${offer_date}" "${cabin}" "${monitor_return_date}")
+  offer_return_date=$(echo "${offer}" | jq -r '.return_date // ""')
+  link=$(flights_link "${origin}" "${dest}" "${offer_date}" "${cabin}" "${offer_return_date}")
 
   printf '{"status":"ok","monitor_id":"%s","discord_channel_id":"%s","price":%s,"average_price":%s,"days_in_avg":%s,"below_average":%s,"fallback_price":%s,"offer":%s,"google_flights":"%s"}\n' \
     "${monitor_id}" "${discord_channel_id}" "${offer_price}" "${average_price}" "${days_in_avg}" "${below_average}" "${offer_fallback}" "${offer}" "${link}"
