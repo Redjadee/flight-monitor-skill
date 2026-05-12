@@ -185,7 +185,7 @@ search_flexible() {
   base_epoch=$(date -d "${depart_date}" +%s 2>/dev/null || date -j -f "%Y-%m-%d" "${depart_date}" +%s)
   today_epoch=$(now_epoch)
 
-  local best_price="" best_offer=""
+  local best_price="" best_offer="" used_fallback=false
 
   for offset in $(seq "-${flex_days}" "${flex_days}"); do
     local check_epoch check_date
@@ -236,13 +236,19 @@ search_flexible() {
       if [ "${fb_better}" = true ]; then
         best_price="${fb_price}"
         best_offer="${fb_offer}"
+        used_fallback=true
       fi
       sleep 0.5
     done
   fi
 
   [ -z "${best_offer}" ] && return 1
-  echo "${best_offer}"
+  # Embed fallback flag so callers can skip writing fallback prices to history
+  if [ "${used_fallback}" = true ]; then
+    echo "${best_offer}" | jq -c '. + {"fallback":true}'
+  else
+    echo "${best_offer}"
+  fi
 }
 
 # ─── History ──────────────────────────────────────────────────────────────────
@@ -566,7 +572,8 @@ cmd_check() {
   local base_epoch today_epoch latest_candidate
   base_epoch=$(date -d "${depart_date}" +%s 2>/dev/null || date -j -f "%Y-%m-%d" "${depart_date}" +%s)
   today_epoch=$(now_epoch)
-  latest_candidate=$(( base_epoch + flex_days * 86400 ))
+  local capped_flex=$(( flex_days > 7 ? 7 : flex_days ))
+  latest_candidate=$(( base_epoch + capped_flex * 86400 ))
   if [ "${latest_candidate}" -lt "${today_epoch}" ]; then
     printf '{"status":"expired","monitor_id":"%s","discord_channel_id":"%s","reason":"depart_date %s (+/-%s days) is in the past — update the monitor with a future date"}\n' \
       "${monitor_id}" "${discord_channel_id}" "${depart_date}" "${flex_days}"
@@ -580,27 +587,26 @@ cmd_check() {
     exit 0
   fi
 
-  append_history "${monitor_id}" "${offer}"
+  local offer_price offer_flight offer_fallback
+  offer_price=$(echo "${offer}"    | jq -r '.price')
+  offer_flight=$(echo "${offer}"   | jq -r '.flight')
+  offer_fallback=$(echo "${offer}" | jq -r '.fallback // false')
 
-  local offer_price offer_flight
-  offer_price=$(echo "${offer}"  | jq -r '.price')
-  offer_flight=$(echo "${offer}" | jq -r '.flight')
-
-  local tmp
-  tmp=$(mktemp)
-  jq --arg id "${monitor_id}" \
-     --argjson price "${offer_price}" \
-     --arg flight "${offer_flight}" \
-     --arg ts "$(now_iso)" \
-     'map(if .id == $id then .last_price = $price | .last_flight = $flight | .last_checked = $ts else . end)' \
-     "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
-
-  local average_price below_average="false" days_in_avg="null"
+  # Calculate average from history BEFORE appending current price, so the
+  # current offer is not included in the baseline it is being compared against.
+  local average_price below_average="null" days_in_avg="null"
   if average_price=$(calc_average_price "${monitor_id}" "${alert_days}"); then
     days_in_avg="${alert_days}"
+    below_average="false"
     awk "BEGIN{exit!(${offer_price}<${average_price})}" && below_average="true" || true
   else
     average_price="null"
+  fi
+
+  # Fallback offers (any-cabin) are not written to history to avoid polluting
+  # the cabin-specific price baseline used for average comparisons.
+  if [ "${offer_fallback}" = "false" ]; then
+    append_history "${monitor_id}" "${offer}"
   fi
 
   local origin dest cabin offer_date link
@@ -610,8 +616,8 @@ cmd_check() {
   offer_date=$(echo "${offer}" | jq -r '.date')
   link=$(flights_link "${origin}" "${dest}" "${offer_date}" "${cabin}")
 
-  printf '{"status":"ok","monitor_id":"%s","discord_channel_id":"%s","price":%s,"average_price":%s,"days_in_avg":%s,"below_average":%s,"offer":%s,"google_flights":"%s"}\n' \
-    "${monitor_id}" "${discord_channel_id}" "${offer_price}" "${average_price}" "${days_in_avg}" "${below_average}" "${offer}" "${link}"
+  printf '{"status":"ok","monitor_id":"%s","discord_channel_id":"%s","price":%s,"average_price":%s,"days_in_avg":%s,"below_average":%s,"fallback_price":%s,"offer":%s,"google_flights":"%s"}\n' \
+    "${monitor_id}" "${discord_channel_id}" "${offer_price}" "${average_price}" "${days_in_avg}" "${below_average}" "${offer_fallback}" "${offer}" "${link}"
 }
 
 # ─── CMD: debug ───────────────────────────────────────────────────────────────

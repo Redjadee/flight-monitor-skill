@@ -216,8 +216,8 @@ Please remove this monitor and add a new one with an updated date.
 ```
 
 Notes:
-- `days_in_avg` in the output reflects how many actual data points were averaged (may be less than `alert_days` for a new monitor)
-- When `average_price` is `null` (first ever check), omit the average line and just report the current price
+- When `average_price` is `null` (first ever check or no history in window), omit the average line and just report the current price; `below_average` will also be `null`
+- When `fallback_price` is `true`, the price is for the cheapest available cabin (not the requested cabin class) because no seats were found in the requested class. Append a note: "⚠️ No {cabin} seats found — price shown is cheapest available cabin." Do not report `below_average` in this case since the price is not comparable to the cabin-specific history
 
 ---
 
