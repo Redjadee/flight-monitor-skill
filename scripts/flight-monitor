@@ -211,10 +211,10 @@ search_flexible() {
     sleep 0.5
   done
 
-  # Fallback: if all attempts failed with full params, retry without nonStop/airlines filters
-  # travelClass is kept so cabin class is preserved; only restrictive filter combinations are dropped
+  # Fallback: if all attempts failed with full params, retry with minimal params
+  # (strips travelClass / nonStop / airlines which can cause empty results)
   if [ -z "${best_offer}" ]; then
-    local fallback_params="adults=${adults}&travelClass=${cabin}&currencyCode=${currency}&max=5"
+    local fallback_params="adults=${adults}&currencyCode=${currency}&max=5"
     [ -n "${return_date}" ] && fallback_params="${fallback_params}&returnDate=${return_date}"
     for offset in $(seq "-${flex_days}" "${flex_days}"); do
       local fb_epoch fb_date
@@ -536,9 +536,23 @@ cmd_check() {
   local token
   token=$(get_token)
 
-  local alert_days discord_channel_id
-  alert_days=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .alert_days // 7' "${MONITORS_FILE}")
+  local alert_days discord_channel_id depart_date flex_days
+  alert_days=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .alert_days // 7'       "${MONITORS_FILE}")
   discord_channel_id=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .discord_channel_id // ""' "${MONITORS_FILE}")
+  depart_date=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .depart_date'           "${MONITORS_FILE}")
+  flex_days=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .flex_days // 0'          "${MONITORS_FILE}")
+
+  # Detect fully-expired monitors before hitting the API: if every candidate date
+  # (depart_date ± flex_days) is already in the past, no request would ever succeed.
+  local base_epoch today_epoch latest_candidate
+  base_epoch=$(date -d "${depart_date}" +%s 2>/dev/null || date -j -f "%Y-%m-%d" "${depart_date}" +%s)
+  today_epoch=$(now_epoch)
+  latest_candidate=$(( base_epoch + flex_days * 86400 ))
+  if [ "${latest_candidate}" -lt "${today_epoch}" ]; then
+    printf '{"status":"expired","monitor_id":"%s","discord_channel_id":"%s","reason":"depart_date %s (+/-%s days) is in the past — update the monitor with a future date"}\n' \
+      "${monitor_id}" "${discord_channel_id}" "${depart_date}" "${flex_days}"
+    exit 0
+  fi
 
   local offer
   if ! offer=$(search_flexible "${monitor_id}" "${token}"); then

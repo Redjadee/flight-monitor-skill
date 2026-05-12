@@ -208,6 +208,13 @@ Book → {google_flights}
 No flights found for this check — will retry next run.
 ```
 
+**If `status` is `"expired"` (depart_date is in the past):**
+```
+⚠️ Flight monitor {monitor_id} has expired.
+The departure date {depart_date} is in the past.
+Please remove this monitor and add a new one with an updated date.
+```
+
 Notes:
 - `days_in_avg` in the output reflects how many actual data points were averaged (may be less than `alert_days` for a new monitor)
 - When `average_price` is `null` (first ever check), omit the average line and just report the current price
