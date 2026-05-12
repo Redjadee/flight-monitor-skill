@@ -170,7 +170,7 @@ search_flexible() {
   cabin=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .cabin'                         "${MONITORS_FILE}")
   adults=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .adults'                       "${MONITORS_FILE}")
   nonstop=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .nonstop'                     "${MONITORS_FILE}")
-  airlines=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .airlines | join(",")'       "${MONITORS_FILE}")
+  airlines=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | (.airlines // []) | join(",")'       "${MONITORS_FILE}")
   return_date=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .return_date // ""'       "${MONITORS_FILE}")
   currency=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .currency'                   "${MONITORS_FILE}")
 
@@ -210,6 +210,36 @@ search_flexible() {
     fi
     sleep 0.5
   done
+
+  # Fallback: if all attempts failed with full params, retry with minimal params
+  # (strips travelClass / nonStop / airlines which can cause empty results)
+  if [ -z "${best_offer}" ]; then
+    local fallback_params="adults=${adults}&currencyCode=${currency}&max=5"
+    [ -n "${return_date}" ] && fallback_params="${fallback_params}&returnDate=${return_date}"
+    for offset in $(seq "-${flex_days}" "${flex_days}"); do
+      local fb_epoch fb_date
+      fb_epoch=$(( base_epoch + offset * 86400 ))
+      [ "${fb_epoch}" -lt "${today_epoch}" ] && continue
+      fb_date=$(date -d "@${fb_epoch}" +%Y-%m-%d 2>/dev/null || date -r "${fb_epoch}" +%Y-%m-%d)
+
+      local fb_offer
+      fb_offer=$(search_one_date "${origin}" "${dest}" "${fb_date}" "${token}" "${fallback_params}") || { sleep 0.5; continue; }
+
+      local fb_price
+      fb_price=$(echo "${fb_offer}" | jq -r '.price')
+
+      local fb_better=false
+      [ -z "${best_price}" ] && fb_better=true
+      if [ "${fb_better}" = false ]; then
+        awk "BEGIN{exit!(${fb_price}<${best_price})}" && fb_better=true || true
+      fi
+      if [ "${fb_better}" = true ]; then
+        best_price="${fb_price}"
+        best_offer="${fb_offer}"
+      fi
+      sleep 0.5
+    done
+  fi
 
   [ -z "${best_offer}" ] && return 1
   echo "${best_offer}"
