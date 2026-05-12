@@ -126,6 +126,16 @@ flight-monitor set-cron --monitor-id <MONITOR_ID> --cron-id "${CRON_ID}"
 I'll send price updates to your Discord channel.
 ```
 
+If `current_offer` is `null` (no flights found during add), replace the last line with:
+```
+📊 No flights found yet — will check on the first cron run.
+```
+
+If `current_offer.fallback` is `true`, the price is from a non-{cabin} seat (no {cabin} availability found). Append:
+```
+⚠️ No {cabin} seats found during initial scan — price shown is cheapest available cabin.
+```
+
 ---
 
 ## Step 2 — Listing Monitors
@@ -134,7 +144,7 @@ I'll send price updates to your Discord channel.
 flight-monitor list
 ```
 
-Format the JSON as a readable table: ID, route, date/flex, cabin, target, last price, last checked, status.
+Format the JSON as a readable table: ID, route, date/flex, cabin, alert_days, last price, last checked, status.
 
 ---
 
