@@ -211,10 +211,10 @@ search_flexible() {
     sleep 0.5
   done
 
-  # Fallback: if all attempts failed with full params, retry with minimal params
-  # (strips travelClass / nonStop / airlines which can cause empty results)
+  # Fallback: if all attempts failed with full params, retry without nonStop/airlines filters
+  # travelClass is kept so cabin class is preserved; only restrictive filter combinations are dropped
   if [ -z "${best_offer}" ]; then
-    local fallback_params="adults=${adults}&currencyCode=${currency}&max=5"
+    local fallback_params="adults=${adults}&travelClass=${cabin}&currencyCode=${currency}&max=5"
     [ -n "${return_date}" ] && fallback_params="${fallback_params}&returnDate=${return_date}"
     for offset in $(seq "-${flex_days}" "${flex_days}"); do
       local fb_epoch fb_date

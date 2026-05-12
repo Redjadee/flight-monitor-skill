@@ -68,16 +68,16 @@ Optional — only ask if ambiguous or user mentioned them:
 
 ```bash
 flight-monitor add \
-  --origin PEK \
-  --destination LHR \
-  --depart-date 2025-06-15 \
+  --origin <ORIGIN_IATA> \
+  --destination <DEST_IATA> \
+  --depart-date <YYYY-MM-DD> \
   --discord-channel <channel-id> \
   --alert-days 7 \
   --flex-days 3 \
-  --cabin BUSINESS \
-  [--return-date 2025-06-30] \
+  --cabin ECONOMY \
+  [--return-date <YYYY-MM-DD>] \
   [--nonstop] \
-  [--airlines CA,CX] \
+  [--airlines XX,YY] \
   [--check-interval 1d]
 ```
 
@@ -117,11 +117,11 @@ flight-monitor set-cron --monitor-id <MONITOR_ID> --cron-id "${CRON_ID}"
 ```
 ✅ Flight monitor created
 
-🔍 Monitor: fm-abc123
-✈️  PEK → LHR | 15 Jun ±3 days | Business
-📉 Alert when price drops below 7-day average
-⏰ Checking every 1 day
-📊 Current lowest: ¥6,240 (CA937, 16 Jun)
+🔍 Monitor: {monitor_id}
+✈️  {origin} → {destination} | {depart_date} ±{flex_days} days | {cabin}
+📉 Alert when price drops below {alert_days}-day average
+⏰ Checking every {check_interval}
+📊 Current lowest: {currency}{current_offer.price} ({current_offer.flight}, {current_offer.date})
 
 I'll send price updates to your Discord channel.
 ```
@@ -184,27 +184,27 @@ When woken by cron with a `flight-monitor check <ID>` instruction:
 **If `below_average` is `true`:**
 ```
 ✈️ Price Drop Alert!
-PEK → LHR | 16 Jun | Business
-Current lowest: ¥4,820 (CA937)
-📉 Below 7-day average of ¥5,340
+{origin} → {destination} | {offer.date} | {cabin}
+Current lowest: {currency}{offer.price} ({offer.flight})
+📉 Below {days_in_avg}-day average of {currency}{average_price}
 
-Book → <google_flights link>
+Book → {google_flights}
 ```
 
 **If `below_average` is `false`:**
 ```
 ✈️ Flight Price Update
-PEK → LHR | 16 Jun | Business
-Current lowest: ¥5,610 (CA937)
-📊 7-day average: ¥5,340 (currently above average)
+{origin} → {destination} | {offer.date} | {cabin}
+Current lowest: {currency}{offer.price} ({offer.flight})
+📊 {days_in_avg}-day average: {currency}{average_price} (currently above average)
 
-Book → <google_flights link>
+Book → {google_flights}
 ```
 
 **If `price` is `null` (no flights found):**
 ```
 ✈️ Flight Price Update
-PEK → LHR | Business
+{origin} → {destination} | {cabin}
 No flights found for this check — will retry next run.
 ```
 
