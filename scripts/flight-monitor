@@ -185,12 +185,18 @@ search_flexible() {
   base_epoch=$(date -d "${depart_date}" +%s 2>/dev/null || date -j -f "%Y-%m-%d" "${depart_date}" +%s)
   today_epoch=$(now_epoch)
 
+  local return_epoch=0
+  [ -n "${return_date}" ] && \
+    return_epoch=$(date -d "${return_date}" +%s 2>/dev/null || date -j -f "%Y-%m-%d" "${return_date}" +%s)
+
   local best_price="" best_offer="" used_fallback=false
 
   for offset in $(seq "-${flex_days}" "${flex_days}"); do
     local check_epoch check_date
     check_epoch=$(( base_epoch + offset * 86400 ))
     [ "${check_epoch}" -lt "${today_epoch}" ] && continue
+    # Skip dates that would land on or after return_date (invalid round-trip range)
+    [ "${return_epoch}" -gt 0 ] && [ "${check_epoch}" -ge "${return_epoch}" ] && continue
     check_date=$(date -d "@${check_epoch}" +%Y-%m-%d 2>/dev/null || date -r "${check_epoch}" +%Y-%m-%d)
 
     local offer
@@ -220,6 +226,7 @@ search_flexible() {
       local fb_epoch fb_date
       fb_epoch=$(( base_epoch + offset * 86400 ))
       [ "${fb_epoch}" -lt "${today_epoch}" ] && continue
+      [ "${return_epoch}" -gt 0 ] && [ "${fb_epoch}" -ge "${return_epoch}" ] && continue
       fb_date=$(date -d "@${fb_epoch}" +%Y-%m-%d 2>/dev/null || date -r "${fb_epoch}" +%Y-%m-%d)
 
       local fb_offer
@@ -395,6 +402,13 @@ cmd_add() {
     || die "--depart-date '${depart_date}' is not a valid date (expected YYYY-MM-DD)"
   add_today=$(now_epoch)
   [ "${add_base_epoch}" -lt "${add_today}" ] && die "--depart-date ${depart_date} is in the past"
+
+  if [ -n "${return_date}" ]; then
+    local return_epoch
+    return_epoch=$(date -d "${return_date}" +%s 2>/dev/null || date -j -f "%Y-%m-%d" "${return_date}" +%s) \
+      || die "--return-date '${return_date}' is not a valid date (expected YYYY-MM-DD)"
+    [ "${return_epoch}" -le "${add_base_epoch}" ] && die "--return-date ${return_date} must be after --depart-date ${depart_date}"
+  fi
 
   load_credentials
   ensure_dirs
