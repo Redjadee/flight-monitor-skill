@@ -125,7 +125,9 @@ resolve_iata() {
     -H "Authorization: Bearer ${token}") \
     || die "Location lookup failed for: ${input}"
 
-  iata=$(echo "${resp}" | grep -o '"iataCode":"[^"]*"' | head -1 | cut -d'"' -f4)
+  iata=$(echo "${resp}" | jq -r '[.data[] | select(.subType == "AIRPORT")] | .[0].iataCode // empty')
+  # Fall back to first result of any subType if no airport-specific entry exists
+  [ -z "${iata}" ] && iata=$(echo "${resp}" | jq -r '.data[0].iataCode // empty')
   [ -z "${iata}" ] && die "Could not resolve location: ${input}"
   echo "${iata}"
 }
@@ -282,14 +284,18 @@ append_history() {
 # ─── Google Flights Link ──────────────────────────────────────────────────────
 
 flights_link() {
-  local origin="$1" dest="$2" date="$3" cabin="$4"
+  local origin="$1" dest="$2" date="$3" cabin="$4" return_date="${5:-}"
   local cabin_code="e"
   case "${cabin}" in
     PREMIUM_ECONOMY) cabin_code="p" ;;
     BUSINESS)        cabin_code="j" ;;
     FIRST)           cabin_code="f" ;;
   esac
-  echo "https://www.google.com/flights#flt=${origin}.${dest}.${date};c:${cabin_code};e:1"
+  if [ -n "${return_date}" ]; then
+    echo "https://www.google.com/flights#flt=${origin}.${dest}.${date};${dest}.${origin}.${return_date};c:${cabin_code};e:1"
+  else
+    echo "https://www.google.com/flights#flt=${origin}.${dest}.${date};c:${cabin_code};e:1"
+  fi
 }
 
 # ─── CMD: setup ───────────────────────────────────────────────────────────────
@@ -475,7 +481,7 @@ cmd_add() {
          "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
     fi
 
-    link=$(flights_link "${origin}" "${dest}" "${offer_date}" "${cabin}")
+    link=$(flights_link "${origin}" "${dest}" "${offer_date}" "${cabin}" "${return_date}")
   else
     offer="null"
   fi
@@ -643,12 +649,13 @@ cmd_check() {
        "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
   fi
 
-  local origin dest cabin offer_date link
-  origin=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .origin'      "${MONITORS_FILE}")
-  dest=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .destination'   "${MONITORS_FILE}")
-  cabin=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .cabin'        "${MONITORS_FILE}")
+  local origin dest cabin offer_date link monitor_return_date
+  origin=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .origin'               "${MONITORS_FILE}")
+  dest=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .destination'            "${MONITORS_FILE}")
+  cabin=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .cabin'                 "${MONITORS_FILE}")
+  monitor_return_date=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .return_date // ""' "${MONITORS_FILE}")
   offer_date=$(echo "${offer}" | jq -r '.date')
-  link=$(flights_link "${origin}" "${dest}" "${offer_date}" "${cabin}")
+  link=$(flights_link "${origin}" "${dest}" "${offer_date}" "${cabin}" "${monitor_return_date}")
 
   printf '{"status":"ok","monitor_id":"%s","discord_channel_id":"%s","price":%s,"average_price":%s,"days_in_avg":%s,"below_average":%s,"fallback_price":%s,"offer":%s,"google_flights":"%s"}\n' \
     "${monitor_id}" "${discord_channel_id}" "${offer_price}" "${average_price}" "${days_in_avg}" "${below_average}" "${offer_fallback}" "${offer}" "${link}"
