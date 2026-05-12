@@ -482,7 +482,7 @@ cmd_add() {
        last_checked: null, last_price: null, last_flight: null
      }]' "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
 
-  local offer link=""
+  local offer link_json="null"
   if offer=$(search_flexible "${monitor_id}" "${token}"); then
     local offer_price offer_flight offer_date offer_fallback
     offer_price=$(echo "${offer}"    | jq -r '.price')
@@ -508,15 +508,16 @@ cmd_add() {
          "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
     fi
 
-    local offer_return_date
+    local offer_return_date link
     offer_return_date=$(echo "${offer}" | jq -r '.return_date // ""')
     link=$(flights_link "${origin}" "${dest}" "${offer_date}" "${cabin}" "${offer_return_date}")
+    link_json="\"${link}\""
   else
     offer="null"
   fi
 
-  printf '{"status":"ok","monitor_id":"%s","discord_channel_id":"%s","current_offer":%s,"google_flights":"%s"}\n' \
-    "${monitor_id}" "${discord_channel}" "${offer:-null}" "${link}"
+  printf '{"status":"ok","monitor_id":"%s","discord_channel_id":"%s","currency":"%s","current_offer":%s,"google_flights":%s}\n' \
+    "${monitor_id}" "${discord_channel}" "${currency}" "${offer}" "${link_json}"
 }
 
 # ─── CMD: list ────────────────────────────────────────────────────────────────
@@ -613,11 +614,12 @@ cmd_check() {
   local token
   token=$(get_token)
 
-  local alert_days discord_channel_id depart_date flex_days
-  alert_days=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .alert_days // 7'       "${MONITORS_FILE}")
+  local alert_days discord_channel_id depart_date flex_days currency
+  alert_days=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .alert_days // 7'           "${MONITORS_FILE}")
   discord_channel_id=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .discord_channel_id // ""' "${MONITORS_FILE}")
-  depart_date=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .depart_date'           "${MONITORS_FILE}")
-  flex_days=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .flex_days // 0'          "${MONITORS_FILE}")
+  depart_date=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .depart_date'               "${MONITORS_FILE}")
+  flex_days=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .flex_days // 0'              "${MONITORS_FILE}")
+  currency=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .currency // "CNY"'            "${MONITORS_FILE}")
 
   # Detect fully-expired monitors before hitting the API: if every candidate date
   # (depart_date ± flex_days) is already in the past, no request would ever succeed.
@@ -634,8 +636,8 @@ cmd_check() {
 
   local offer
   if ! offer=$(search_flexible "${monitor_id}" "${token}"); then
-    printf '{"status":"ok","monitor_id":"%s","discord_channel_id":"%s","price":null,"average_price":null,"days_in_avg":null,"below_average":null,"fallback_price":null,"offer":null,"google_flights":null}\n' \
-      "${monitor_id}" "${discord_channel_id}"
+    printf '{"status":"ok","monitor_id":"%s","discord_channel_id":"%s","currency":"%s","price":null,"average_price":null,"days_in_avg":null,"below_average":null,"fallback_price":null,"offer":null,"google_flights":null}\n' \
+      "${monitor_id}" "${discord_channel_id}" "${currency}"
     exit 0
   fi
 
@@ -686,8 +688,8 @@ cmd_check() {
   offer_return_date=$(echo "${offer}" | jq -r '.return_date // ""')
   link=$(flights_link "${origin}" "${dest}" "${offer_date}" "${cabin}" "${offer_return_date}")
 
-  printf '{"status":"ok","monitor_id":"%s","discord_channel_id":"%s","price":%s,"average_price":%s,"days_in_avg":%s,"below_average":%s,"fallback_price":%s,"offer":%s,"google_flights":"%s"}\n' \
-    "${monitor_id}" "${discord_channel_id}" "${offer_price}" "${average_price}" "${days_in_avg}" "${below_average}" "${offer_fallback}" "${offer}" "${link}"
+  printf '{"status":"ok","monitor_id":"%s","discord_channel_id":"%s","currency":"%s","price":%s,"average_price":%s,"days_in_avg":%s,"below_average":%s,"fallback_price":%s,"offer":%s,"google_flights":"%s"}\n' \
+    "${monitor_id}" "${discord_channel_id}" "${currency}" "${offer_price}" "${average_price}" "${days_in_avg}" "${below_average}" "${offer_fallback}" "${offer}" "${link}"
 }
 
 # ─── CMD: debug ───────────────────────────────────────────────────────────────

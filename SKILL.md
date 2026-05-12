@@ -189,7 +189,7 @@ When woken by cron with a `flight-monitor check <ID>` instruction:
 
 1. Run `flight-monitor check <MONITOR_ID>`
 2. **Always** compose and send a reply — the `--announce` flag on the cron job delivers it to the bound Discord channel. Never skip the reply.
-3. Format the reply based on the JSON output:
+3. Format the reply based on the JSON output. Use `currency` from the top-level JSON field for all price formatting (e.g. `CNY`, `USD`):
 
 **If `below_average` is `true`:**
 ```
