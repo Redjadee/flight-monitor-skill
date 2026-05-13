@@ -6,10 +6,15 @@ export function cmdSetCron(args: string[]): void {
   let monitorId = "";
   let cronId = "";
 
+  const req = (flag: string, val: string | undefined): string => {
+    if (!val) die(`${flag} requires a value`);
+    return val;
+  };
+
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
-      case "--monitor-id": monitorId = args[++i]; break;
-      case "--cron-id":    cronId = args[++i]; break;
+      case "--monitor-id": monitorId = req("--monitor-id", args[++i]); break;
+      case "--cron-id":    cronId = req("--cron-id", args[++i]); break;
       default: die(`Unknown option: ${args[i]}`);
     }
   }

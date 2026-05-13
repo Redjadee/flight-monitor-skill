@@ -1,4 +1,3 @@
-import { execSync } from "node:child_process";
 import { mkdirSync, existsSync, writeFileSync } from "node:fs";
 import { MONITORS_FILE, FM_DIR, HISTORY_DIR } from "./config.js";
 
@@ -55,16 +54,6 @@ export function flightsLink(
     return `https://www.google.com/flights#flt=${origin}.${dest}.${date};${dest}.${origin}.${returnDate};c:${c};e:1`;
   }
   return `https://www.google.com/flights#flt=${origin}.${dest}.${date};c:${c};e:1`;
-}
-
-export function requireCmds(...cmds: string[]): void {
-  for (const cmd of cmds) {
-    try {
-      execSync(`command -v ${cmd}`, { stdio: "ignore" });
-    } catch {
-      die(`Required command not found: ${cmd}`);
-    }
-  }
 }
 
 /** Shift a YYYY-MM-DD date by offsetDays. */

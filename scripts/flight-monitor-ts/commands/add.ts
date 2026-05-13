@@ -20,20 +20,27 @@ export async function cmdAdd(args: string[]): Promise<void> {
   let alertDays = 7;
   let discordChannel = "";
 
+  const req = (flag: string, val: string | undefined): string => {
+    if (!val) die(`${flag} requires a value`);
+    return val;
+  };
+
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
-      case "--origin":           origin = args[++i]; break;
-      case "--destination":      dest = args[++i]; break;
-      case "--depart-date":      departDate = args[++i]; break;
+      case "--origin":           origin = req("--origin", args[++i]); break;
+      case "--destination":      dest = req("--destination", args[++i]); break;
+      case "--depart-date":      departDate = req("--depart-date", args[++i]); break;
       case "--flex-days": {
         const v = parseInt(args[++i], 10);
         if (isNaN(v) || v < 0) die("--flex-days must be a non-negative integer");
         flexDays = v;
         break;
       }
-      case "--return-date":      returnDate = args[++i]; break;
+      case "--return-date":      returnDate = req("--return-date", args[++i]); break;
       case "--cabin": {
-        const v = args[++i].toUpperCase();
+        const raw = args[++i];
+        if (!raw) die("--cabin requires a value");
+        const v = raw.toUpperCase();
         const valid = ["ECONOMY", "PREMIUM_ECONOMY", "BUSINESS", "FIRST"];
         if (!valid.includes(v)) die(`--cabin must be one of: ${valid.join(", ")}`);
         cabin = v;
@@ -46,15 +53,15 @@ export async function cmdAdd(args: string[]): Promise<void> {
         break;
       }
       case "--nonstop":          nonstop = true; break;
-      case "--airlines":         airlines = args[++i]; break;
-      case "--check-interval":   checkInterval = args[++i]; break;
+      case "--airlines":         airlines = req("--airlines", args[++i]); break;
+      case "--check-interval":   checkInterval = req("--check-interval", args[++i]); break;
       case "--alert-days": {
         const v = parseInt(args[++i], 10);
         if (isNaN(v) || v < 1) die("--alert-days must be a positive integer");
         alertDays = v;
         break;
       }
-      case "--discord-channel":  discordChannel = args[++i]; break;
+      case "--discord-channel":  discordChannel = req("--discord-channel", args[++i]); break;
       default: die(`Unknown option: ${args[i]}`);
     }
   }

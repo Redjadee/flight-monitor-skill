@@ -23,6 +23,7 @@ export async function cmdCheck(args: string[]): Promise<void> {
 
   // Detect fully-expired monitors before hitting the API
   const baseEpoch = dateToEpoch(monitor.depart_date);
+  if (isNaN(baseEpoch)) die(`Monitor ${monitorId} has invalid depart_date: ${monitor.depart_date}`);
   const todayEpoch = todayMidnightEpoch();
   const cappedFlex = Math.min(monitor.flex_days, 7);
   const latestCandidate = baseEpoch + cappedFlex * 86400;
@@ -43,6 +44,12 @@ export async function cmdCheck(args: string[]): Promise<void> {
   const offer = await searchFlexible(monitorId, token);
 
   if (!offer) {
+    const monitorsUpdated = JSON.parse(readFileSync(MONITORS_FILE, "utf8")) as Monitor[];
+    const idx = monitorsUpdated.findIndex((m) => m.id === monitorId);
+    if (idx !== -1) {
+      monitorsUpdated[idx].last_checked = nowIso();
+      writeFileSync(MONITORS_FILE, JSON.stringify(monitorsUpdated, null, 2), "utf8");
+    }
     process.stdout.write(
       JSON.stringify({
         status: "ok",
@@ -51,7 +58,7 @@ export async function cmdCheck(args: string[]): Promise<void> {
         currency: monitor.currency,
         price: null,
         average_price: null,
-        days_in_avg: null,
+        alert_days_window: null,
         below_average: null,
         is_fallback: null,
         offer: null,
@@ -66,12 +73,12 @@ export async function cmdCheck(args: string[]): Promise<void> {
   // Calculate average BEFORE appending current price
   let averagePrice: number | null = null;
   let belowAverage: boolean | null = null;
-  let daysInAvg: number | null = null;
+  let alertDaysWindow: number | null = null;
 
   if (!fallback) {
     averagePrice = calcAveragePrice(monitorId, monitor.alert_days);
     if (averagePrice !== null) {
-      daysInAvg = monitor.alert_days;
+      alertDaysWindow = monitor.alert_days;
       belowAverage = offer.price < averagePrice;
     }
   }
@@ -99,7 +106,7 @@ export async function cmdCheck(args: string[]): Promise<void> {
       currency: monitor.currency,
       price: offer.price,
       average_price: averagePrice,
-      days_in_avg: daysInAvg,
+      alert_days_window: alertDaysWindow,
       below_average: belowAverage,
       is_fallback: fallback,
       offer,
