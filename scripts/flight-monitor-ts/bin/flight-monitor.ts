@@ -13,8 +13,7 @@ function usage(): void {
 
 Usage:
   flight-monitor setup      --client-id <id> --client-secret <secret>
-                            [--currency CNY] [--bin-path /usr/local/bin/flight-monitor]
-                            [--no-install]
+                            [--currency CNY] [--no-install]
 
   flight-monitor add        --origin <IATA|city> --destination <IATA|city>
                             --depart-date <YYYY-MM-DD> --discord-channel <channel-id>
