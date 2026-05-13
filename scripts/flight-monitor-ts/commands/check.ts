@@ -53,7 +53,7 @@ export async function cmdCheck(args: string[]): Promise<void> {
         average_price: null,
         days_in_avg: null,
         below_average: null,
-        fallback_price: null,
+        is_fallback: null,
         offer: null,
         google_flights: null,
       }) + "\n"
@@ -79,14 +79,15 @@ export async function cmdCheck(args: string[]): Promise<void> {
   // Update history and monitor state
   const monitorsUpdated = JSON.parse(readFileSync(MONITORS_FILE, "utf8")) as Monitor[];
   const idx = monitorsUpdated.findIndex((m) => m.id === monitorId);
-
-  if (!fallback) {
-    appendHistory(monitorId, offer);
-    monitorsUpdated[idx].last_price = offer.price;
-    monitorsUpdated[idx].last_flight = offer.flight;
+  if (idx !== -1) {
+    if (!fallback) {
+      appendHistory(monitorId, offer);
+      monitorsUpdated[idx].last_price = offer.price;
+      monitorsUpdated[idx].last_flight = offer.flight;
+    }
+    monitorsUpdated[idx].last_checked = nowIso();
+    writeFileSync(MONITORS_FILE, JSON.stringify(monitorsUpdated, null, 2), "utf8");
   }
-  monitorsUpdated[idx].last_checked = nowIso();
-  writeFileSync(MONITORS_FILE, JSON.stringify(monitorsUpdated, null, 2), "utf8");
 
   const link = flightsLink(monitor.origin, monitor.destination, offer.date, monitor.cabin, offer.return_date);
 
@@ -100,7 +101,7 @@ export async function cmdCheck(args: string[]): Promise<void> {
       average_price: averagePrice,
       days_in_avg: daysInAvg,
       below_average: belowAverage,
-      fallback_price: fallback,
+      is_fallback: fallback,
       offer,
       google_flights: link,
     }) + "\n"

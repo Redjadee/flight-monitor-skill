@@ -2,14 +2,11 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { MONITORS_FILE } from "../lib/config.js";
 import { loadCredentials, type Monitor } from "../lib/config.js";
 import { die, ensureDirs, genId, nowIso, flightsLink, dateToEpoch, nowEpoch } from "../lib/utils.js";
-import { requireCmds } from "../lib/utils.js";
 import { getToken } from "../lib/auth.js";
 import { resolveIata, searchFlexible } from "../lib/search.js";
 import { appendHistory } from "../lib/history.js";
 
 export async function cmdAdd(args: string[]): Promise<void> {
-  requireCmds("curl", "jq");
-
   let origin = "";
   let dest = "";
   let departDate = "";
@@ -28,7 +25,12 @@ export async function cmdAdd(args: string[]): Promise<void> {
       case "--origin":           origin = args[++i]; break;
       case "--destination":      dest = args[++i]; break;
       case "--depart-date":      departDate = args[++i]; break;
-      case "--flex-days":        flexDays = parseInt(args[++i], 10); break;
+      case "--flex-days": {
+        const v = parseInt(args[++i], 10);
+        if (isNaN(v) || v < 0) die("--flex-days must be a non-negative integer");
+        flexDays = v;
+        break;
+      }
       case "--return-date":      returnDate = args[++i]; break;
       case "--cabin": {
         const v = args[++i].toUpperCase();
@@ -37,11 +39,21 @@ export async function cmdAdd(args: string[]): Promise<void> {
         cabin = v;
         break;
       }
-      case "--adults":           adults = parseInt(args[++i], 10); break;
+      case "--adults": {
+        const v = parseInt(args[++i], 10);
+        if (isNaN(v) || v < 1) die("--adults must be a positive integer");
+        adults = v;
+        break;
+      }
       case "--nonstop":          nonstop = true; break;
       case "--airlines":         airlines = args[++i]; break;
       case "--check-interval":   checkInterval = args[++i]; break;
-      case "--alert-days":       alertDays = parseInt(args[++i], 10); break;
+      case "--alert-days": {
+        const v = parseInt(args[++i], 10);
+        if (isNaN(v) || v < 1) die("--alert-days must be a positive integer");
+        alertDays = v;
+        break;
+      }
       case "--discord-channel":  discordChannel = args[++i]; break;
       default: die(`Unknown option: ${args[i]}`);
     }
@@ -106,14 +118,15 @@ export async function cmdAdd(args: string[]): Promise<void> {
     const fallback = offer.fallback ?? false;
     const monitorsUpdated = JSON.parse(readFileSync(MONITORS_FILE, "utf8")) as Monitor[];
     const idx = monitorsUpdated.findIndex((m) => m.id === monitorId);
-
-    if (!fallback) {
-      appendHistory(monitorId, offer);
-      monitorsUpdated[idx].last_price = offer.price;
-      monitorsUpdated[idx].last_flight = offer.flight;
+    if (idx !== -1) {
+      if (!fallback) {
+        appendHistory(monitorId, offer);
+        monitorsUpdated[idx].last_price = offer.price;
+        monitorsUpdated[idx].last_flight = offer.flight;
+      }
+      monitorsUpdated[idx].last_checked = nowIso();
+      writeFileSync(MONITORS_FILE, JSON.stringify(monitorsUpdated, null, 2), "utf8");
     }
-    monitorsUpdated[idx].last_checked = nowIso();
-    writeFileSync(MONITORS_FILE, JSON.stringify(monitorsUpdated, null, 2), "utf8");
   }
 
   const link = offer

@@ -2,12 +2,10 @@ import { existsSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { CONFIG_FILE } from "../lib/config.js";
-import { die, info, ensureDirs, requireCmds } from "../lib/utils.js";
+import { die, info, ensureDirs } from "../lib/utils.js";
 import { getToken } from "../lib/auth.js";
 
 export async function cmdSetup(args: string[]): Promise<void> {
-  requireCmds("curl", "jq");
-
   let clientId = "";
   let clientSecret = "";
   let currency = "";

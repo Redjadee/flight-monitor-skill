@@ -3,7 +3,7 @@ import { mkdirSync, existsSync, writeFileSync } from "node:fs";
 import { MONITORS_FILE, FM_DIR, HISTORY_DIR } from "./config.js";
 
 export function die(msg: string): never {
-  process.stderr.write(`{"error":"${msg}"}\n`);
+  process.stderr.write(JSON.stringify({ error: msg }) + "\n");
   process.exit(1);
 }
 

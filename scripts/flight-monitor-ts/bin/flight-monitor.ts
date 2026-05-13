@@ -56,6 +56,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
-  process.stderr.write(`{"error":"${String(err)}"}\n`);
+  process.stderr.write(JSON.stringify({ error: String(err) }) + "\n");
   process.exit(1);
 });
