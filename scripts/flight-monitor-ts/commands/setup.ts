@@ -1,9 +1,20 @@
 import { existsSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { CONFIG_FILE } from "../lib/config.js";
 import { die, info, ensureDirs } from "../lib/utils.js";
 import { getToken } from "../lib/auth.js";
+
+function findPkgDir(): string {
+  let dir = dirname(fileURLToPath(import.meta.url));
+  while (true) {
+    if (existsSync(join(dir, "package.json"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) die("Could not locate package root");
+    dir = parent;
+  }
+}
 
 export async function cmdSetup(args: string[]): Promise<void> {
   let clientId = "";
@@ -54,8 +65,7 @@ export async function cmdSetup(args: string[]): Promise<void> {
   info(`  ✓ Config written to ${CONFIG_FILE}`);
 
   if (installCli) {
-    // Resolve package root from dist/commands/setup.js → two levels up
-    const pkgDir = fileURLToPath(new URL("../../", import.meta.url));
+    const pkgDir = findPkgDir();
     info(`Installing flight-monitor CLI globally...`);
     try {
       execSync(`npm install -g "${pkgDir}"`, { stdio: "pipe" });
