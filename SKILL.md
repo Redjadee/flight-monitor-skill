@@ -37,7 +37,7 @@ flight-monitor version
 ```
 
 If the command is not found, tell the user:
-> "`flight-monitor` is not installed or not on PATH. Download the script and run `flight-monitor setup` first — it will install the CLI globally."
+> "`flight-monitor` is not installed or not on PATH. Run `npm install` inside `scripts/flight-monitor-ts/`, then run `npx tsx bin/flight-monitor.ts setup` — it will install the CLI globally."
 
 If the CLI is found but `~/.flight-monitor/config` is missing, tell the user to run `flight-monitor setup`.
 

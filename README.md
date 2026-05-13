@@ -2,13 +2,24 @@
 
 Amadeus flight price monitor for OpenClaw. Watches flight prices and notifies you via your Gateway-configured channel when they drop below a target.
 
+## Requirements
+
+- Node.js 18+
+- `tsx` (installed automatically via `npm install`)
+- OpenClaw (for cron notifications)
+- Amadeus production API credentials
+
 ## Install
 
-Download this folder anywhere you like, then run setup from inside it:
+```bash
+cd scripts/flight-monitor-ts
+npm install
+```
+
+Then run setup:
 
 ```bash
-cd /path/to/flight-monitor
-bash scripts/flight-monitor setup \
+npx tsx bin/flight-monitor.ts setup \
   --client-id YOUR_AMADEUS_CLIENT_ID \
   --client-secret YOUR_AMADEUS_CLIENT_SECRET
 ```
@@ -16,7 +27,7 @@ bash scripts/flight-monitor setup \
 Setup validates your Amadeus credentials, writes them to `~/.flight-monitor/config`, and installs the CLI to `/usr/local/bin`. Optional flags:
 
 ```bash
-bash scripts/flight-monitor setup \
+npx tsx bin/flight-monitor.ts setup \
   --client-id YOUR_AMADEUS_CLIENT_ID \
   --client-secret YOUR_AMADEUS_CLIENT_SECRET \
   --currency USD \
@@ -26,7 +37,7 @@ bash scripts/flight-monitor setup \
 If you've already run setup before, you can re-run it without flags to reinstall the CLI — existing credentials will be reused from `~/.flight-monitor/config`:
 
 ```bash
-bash scripts/flight-monitor setup
+npx tsx bin/flight-monitor.ts setup
 ```
 
 After setup, `flight-monitor` is available globally:
@@ -77,17 +88,31 @@ flight-monitor remove fm-abc123
 flight-monitor check fm-abc123
 ```
 
+## Code Structure
+
+```
+scripts/flight-monitor-ts/
+  bin/flight-monitor.ts      # entrypoint & command dispatcher
+  commands/
+    setup.ts                 # setup command
+    add.ts                   # add command
+    list.ts                  # list command
+    remove.ts                # remove command
+    set-cron.ts              # set-cron command
+    check.ts                 # check command
+    debug.ts                 # debug command
+    version.ts               # version command
+  lib/
+    auth.ts                  # Amadeus token fetch & cache
+    config.ts                # paths, credential loading, Monitor type
+    history.ts               # CSV history write & average calculation
+    search.ts                # IATA resolve, single-date & flexible search
+    utils.ts                 # shared utilities (die, info, dates, etc.)
+```
+
 ## Data
 
 Everything lives in `~/.flight-monitor/`:
 - `config` — Amadeus credentials and default currency
 - `monitors.json` — all monitor tasks
 - `history/<monitor-id>.csv` — price history per route
-
-## Requirements
-
-- `bash` 4+
-- `curl`
-- `jq`
-- OpenClaw (for cron notifications)
-- Amadeus production API credentials
