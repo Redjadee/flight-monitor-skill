@@ -64,6 +64,10 @@ export async function cmdDebug(args: string[]): Promise<void> {
 
   info(`HTTP status: ${searchResp.status}`);
   info("");
-  const body = await searchResp.json();
-  process.stdout.write(JSON.stringify(body, null, 2) + "\n");
+  const rawText = await searchResp.text();
+  try {
+    process.stdout.write(JSON.stringify(JSON.parse(rawText), null, 2) + "\n");
+  } catch {
+    process.stdout.write(rawText + "\n");
+  }
 }

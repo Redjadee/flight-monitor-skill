@@ -50,7 +50,7 @@ async function main(): Promise<void> {
     case "help":            usage(); break;
     case undefined:         usage(); break;
     default:
-      process.stderr.write(`{"error":"Unknown command: ${cmd}. Run 'flight-monitor help'"}\n`);
+      process.stderr.write(JSON.stringify({ error: `Unknown command: ${cmd}. Run 'flight-monitor help'` }) + "\n");
       process.exit(1);
   }
 }

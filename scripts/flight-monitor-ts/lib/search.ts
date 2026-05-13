@@ -16,12 +16,8 @@ export async function resolveIata(input: string, token: string): Promise<string>
   if (/^[A-Z]{3}$/.test(input)) return input;
 
   const url = `${AMADEUS_BASE}/v1/reference-data/locations?keyword=${encodeURIComponent(input)}&subType=CITY,AIRPORT&page%5Blimit%5D=5`;
-  let resp: Response;
-  try {
-    resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  } catch {
-    die(`Location lookup failed for: ${input}`);
-  }
+  const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+    .catch(() => die(`Location lookup failed for: ${input}`));
 
   if (!resp.ok) {
     const errBody = await resp.text().catch(() => "");
@@ -75,10 +71,12 @@ export async function searchOneDate(
   const price = parseFloat(first.price.grandTotal ?? first.price.total ?? "");
   if (isNaN(price)) return null;
 
-  const seg = first.itineraries[0].segments[0];
+  const itin0 = first.itineraries[0];
+  const seg = itin0?.segments[0];
+  if (!itin0 || !seg) return null;
   const carrier = seg.carrierCode;
   const flight = `${carrier}${seg.number}`;
-  const duration = first.itineraries[0].duration;
+  const duration = itin0.duration;
 
   return { date, price, carrier, flight, duration };
 }

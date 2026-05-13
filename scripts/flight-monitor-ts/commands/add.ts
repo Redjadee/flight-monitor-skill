@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { MONITORS_FILE } from "../lib/config.js";
 import { loadCredentials, type Monitor } from "../lib/config.js";
-import { die, ensureDirs, genId, nowIso, flightsLink, dateToEpoch, nowEpoch } from "../lib/utils.js";
+import { die, ensureDirs, genId, nowIso, flightsLink, dateToEpoch, todayMidnightEpoch } from "../lib/utils.js";
 import { getToken } from "../lib/auth.js";
 import { resolveIata, searchFlexible } from "../lib/search.js";
 import { appendHistory } from "../lib/history.js";
@@ -66,7 +66,7 @@ export async function cmdAdd(args: string[]): Promise<void> {
 
   const departEpoch = dateToEpoch(departDate);
   if (isNaN(departEpoch)) die(`--depart-date '${departDate}' is not a valid date (expected YYYY-MM-DD)`);
-  if (departEpoch < nowEpoch()) die(`--depart-date ${departDate} is in the past`);
+  if (departEpoch < todayMidnightEpoch()) die(`--depart-date ${departDate} is in the past`);
 
   if (returnDate) {
     const returnEpoch = dateToEpoch(returnDate);
