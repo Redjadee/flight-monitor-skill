@@ -1,5 +1,6 @@
-import { readFileSync, writeFileSync } from "node:fs";
-import { MONITORS_FILE, type Monitor } from "../lib/config.js";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { HISTORY_DIR, MONITORS_FILE, type Monitor } from "../lib/config.js";
 import { die, ensureDirs } from "../lib/utils.js";
 
 export function cmdRemove(args: string[]): void {
@@ -16,7 +17,11 @@ export function cmdRemove(args: string[]): void {
   const updated = monitors.filter((m) => m.id !== monitorId);
   writeFileSync(MONITORS_FILE, JSON.stringify(updated, null, 2), "utf8");
 
+  const histFile = join(HISTORY_DIR, `${monitorId}.csv`);
+  const historyRemoved = existsSync(histFile);
+  if (historyRemoved) rmSync(histFile);
+
   process.stdout.write(
-    JSON.stringify({ status: "ok", removed: monitorId, cron_job_id: cronId }) + "\n"
+    JSON.stringify({ status: "ok", removed: monitorId, cron_job_id: cronId, history_removed: historyRemoved }) + "\n"
   );
 }
