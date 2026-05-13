@@ -125,7 +125,9 @@ resolve_iata() {
     -H "Authorization: Bearer ${token}") \
     || die "Location lookup failed for: ${input}"
 
-  iata=$(echo "${resp}" | grep -o '"iataCode":"[^"]*"' | head -1 | cut -d'"' -f4)
+  iata=$(echo "${resp}" | jq -r '[.data[] | select(.subType == "AIRPORT")] | .[0].iataCode // empty')
+  # Fall back to first result of any subType if no airport-specific entry exists
+  [ -z "${iata}" ] && iata=$(echo "${resp}" | jq -r '.data[0].iataCode // empty')
   [ -z "${iata}" ] && die "Could not resolve location: ${input}"
   echo "${iata}"
 }
@@ -146,7 +148,7 @@ search_one_date() {
   [ "${count}" -eq 0 ] && return 1
 
   local price carrier flight_num duration
-  price=$(echo "${resp}"      | jq -r '.data[0].price.total // empty')
+  price=$(echo "${resp}"      | jq -r '(.data[0].price.grandTotal // .data[0].price.total) // empty')
   carrier=$(echo "${resp}"    | jq -r '.data[0].itineraries[0].segments[0].carrierCode // empty')
   flight_num=$(echo "${resp}" | jq -r '.data[0].itineraries[0].segments[0].number // empty')
   duration=$(echo "${resp}"   | jq -r '.data[0].itineraries[0].duration // empty')
@@ -170,14 +172,15 @@ search_flexible() {
   cabin=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .cabin'                         "${MONITORS_FILE}")
   adults=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .adults'                       "${MONITORS_FILE}")
   nonstop=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .nonstop'                     "${MONITORS_FILE}")
-  airlines=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .airlines | join(",")'       "${MONITORS_FILE}")
+  airlines=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | (.airlines // []) | join(",")'       "${MONITORS_FILE}")
   return_date=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .return_date // ""'       "${MONITORS_FILE}")
   currency=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .currency'                   "${MONITORS_FILE}")
 
-  local params="adults=${adults}&travelClass=${cabin}&currencyCode=${currency}&max=5"
-  [ "${nonstop}" = "true" ] && params="${params}&nonStop=true"
-  [ -n "${airlines}" ]      && params="${params}&includedAirlineCodes=${airlines}"
-  [ -n "${return_date}" ]   && params="${params}&returnDate=${return_date}"
+  # returnDate is NOT added to the global params — it shifts with each offset so
+  # that the trip duration stays constant across all flex candidates.
+  local params_base="adults=${adults}&travelClass=${cabin}&currencyCode=${currency}&max=5"
+  [ "${nonstop}" = "true" ] && params_base="${params_base}&nonStop=true"
+  [ -n "${airlines}" ]      && params_base="${params_base}&includedAirlineCodes=${airlines}"
 
   [ "${flex_days}" -gt 7 ] && flex_days=7
 
@@ -185,7 +188,11 @@ search_flexible() {
   base_epoch=$(date -d "${depart_date}" +%s 2>/dev/null || date -j -f "%Y-%m-%d" "${depart_date}" +%s)
   today_epoch=$(now_epoch)
 
-  local best_price="" best_offer=""
+  local return_epoch=0
+  [ -n "${return_date}" ] && \
+    return_epoch=$(date -d "${return_date}" +%s 2>/dev/null || date -j -f "%Y-%m-%d" "${return_date}" +%s)
+
+  local best_price="" best_offer="" used_fallback=false
 
   for offset in $(seq "-${flex_days}" "${flex_days}"); do
     local check_epoch check_date
@@ -193,8 +200,21 @@ search_flexible() {
     [ "${check_epoch}" -lt "${today_epoch}" ] && continue
     check_date=$(date -d "@${check_epoch}" +%Y-%m-%d 2>/dev/null || date -r "${check_epoch}" +%Y-%m-%d)
 
+    # Shift return_date by the same offset to preserve trip duration
+    local iter_params="${params_base}"
+    if [ "${return_epoch}" -gt 0 ]; then
+      local iter_return_date
+      iter_return_date=$(date -d "@$(( return_epoch + offset * 86400 ))" +%Y-%m-%d 2>/dev/null \
+                      || date -r "$(( return_epoch + offset * 86400 ))" +%Y-%m-%d)
+      iter_params="${iter_params}&returnDate=${iter_return_date}"
+    fi
+
     local offer
-    offer=$(search_one_date "${origin}" "${dest}" "${check_date}" "${token}" "${params}") || { sleep 0.5; continue; }
+    offer=$(search_one_date "${origin}" "${dest}" "${check_date}" "${token}" "${iter_params}") || { sleep 0.5; continue; }
+
+    # Embed the per-offset return_date so callers can build the correct Google Flights link
+    [ "${return_epoch}" -gt 0 ] && \
+      offer=$(echo "${offer}" | jq -c --arg rd "${iter_return_date}" '. + {"return_date": $rd}')
 
     local offer_price
     offer_price=$(echo "${offer}" | jq -r '.price')
@@ -211,8 +231,54 @@ search_flexible() {
     sleep 0.5
   done
 
+  # Fallback: if all attempts failed with full params, retry with minimal params
+  # (strips travelClass / nonStop / airlines which can cause empty results)
+  if [ -z "${best_offer}" ]; then
+    local fallback_params_base="adults=${adults}&currencyCode=${currency}&max=5"
+    for offset in $(seq "-${flex_days}" "${flex_days}"); do
+      local fb_epoch fb_date
+      fb_epoch=$(( base_epoch + offset * 86400 ))
+      [ "${fb_epoch}" -lt "${today_epoch}" ] && continue
+      fb_date=$(date -d "@${fb_epoch}" +%Y-%m-%d 2>/dev/null || date -r "${fb_epoch}" +%Y-%m-%d)
+
+      local fb_iter_params="${fallback_params_base}"
+      if [ "${return_epoch}" -gt 0 ]; then
+        local fb_return_date
+        fb_return_date=$(date -d "@$(( return_epoch + offset * 86400 ))" +%Y-%m-%d 2>/dev/null \
+                      || date -r "$(( return_epoch + offset * 86400 ))" +%Y-%m-%d)
+        fb_iter_params="${fb_iter_params}&returnDate=${fb_return_date}"
+      fi
+
+      local fb_offer
+      fb_offer=$(search_one_date "${origin}" "${dest}" "${fb_date}" "${token}" "${fb_iter_params}") || { sleep 0.5; continue; }
+
+      [ "${return_epoch}" -gt 0 ] && \
+        fb_offer=$(echo "${fb_offer}" | jq -c --arg rd "${fb_return_date}" '. + {"return_date": $rd}')
+
+      local fb_price
+      fb_price=$(echo "${fb_offer}" | jq -r '.price')
+
+      local fb_better=false
+      [ -z "${best_price}" ] && fb_better=true
+      if [ "${fb_better}" = false ]; then
+        awk "BEGIN{exit!(${fb_price}<${best_price})}" && fb_better=true || true
+      fi
+      if [ "${fb_better}" = true ]; then
+        best_price="${fb_price}"
+        best_offer="${fb_offer}"
+        used_fallback=true
+      fi
+      sleep 0.5
+    done
+  fi
+
   [ -z "${best_offer}" ] && return 1
-  echo "${best_offer}"
+  # Embed fallback flag so callers can skip writing fallback prices to history
+  if [ "${used_fallback}" = true ]; then
+    echo "${best_offer}" | jq -c '. + {"fallback":true}'
+  else
+    echo "${best_offer}"
+  fi
 }
 
 # ─── History ──────────────────────────────────────────────────────────────────
@@ -239,14 +305,18 @@ append_history() {
 # ─── Google Flights Link ──────────────────────────────────────────────────────
 
 flights_link() {
-  local origin="$1" dest="$2" date="$3" cabin="$4"
+  local origin="$1" dest="$2" date="$3" cabin="$4" return_date="${5:-}"
   local cabin_code="e"
   case "${cabin}" in
     PREMIUM_ECONOMY) cabin_code="p" ;;
     BUSINESS)        cabin_code="j" ;;
     FIRST)           cabin_code="f" ;;
   esac
-  echo "https://www.google.com/flights#flt=${origin}.${dest}.${date};c:${cabin_code};e:1"
+  if [ -n "${return_date}" ]; then
+    echo "https://www.google.com/flights#flt=${origin}.${dest}.${date};${dest}.${origin}.${return_date};c:${cabin_code};e:1"
+  else
+    echo "https://www.google.com/flights#flt=${origin}.${dest}.${date};c:${cabin_code};e:1"
+  fi
 }
 
 # ─── CMD: setup ───────────────────────────────────────────────────────────────
@@ -354,6 +424,19 @@ cmd_add() {
   [ -z "${depart_date}" ]     && die "--depart-date is required"
   [ -z "${discord_channel}" ] && die "--discord-channel is required"
 
+  local add_base_epoch add_today
+  add_base_epoch=$(date -d "${depart_date}" +%s 2>/dev/null || date -j -f "%Y-%m-%d" "${depart_date}" +%s) \
+    || die "--depart-date '${depart_date}' is not a valid date (expected YYYY-MM-DD)"
+  add_today=$(now_epoch)
+  [ "${add_base_epoch}" -lt "${add_today}" ] && die "--depart-date ${depart_date} is in the past"
+
+  if [ -n "${return_date}" ]; then
+    local return_epoch
+    return_epoch=$(date -d "${return_date}" +%s 2>/dev/null || date -j -f "%Y-%m-%d" "${return_date}" +%s) \
+      || die "--return-date '${return_date}' is not a valid date (expected YYYY-MM-DD)"
+    [ "${return_epoch}" -le "${add_base_epoch}" ] && die "--return-date ${return_date} must be after --depart-date ${depart_date}"
+  fi
+
   load_credentials
   ensure_dirs
 
@@ -399,30 +482,42 @@ cmd_add() {
        last_checked: null, last_price: null, last_flight: null
      }]' "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
 
-  local offer link=""
+  local offer link_json="null"
   if offer=$(search_flexible "${monitor_id}" "${token}"); then
-    append_history "${monitor_id}" "${offer}"
+    local offer_price offer_flight offer_date offer_fallback
+    offer_price=$(echo "${offer}"    | jq -r '.price')
+    offer_flight=$(echo "${offer}"   | jq -r '.flight')
+    offer_date=$(echo "${offer}"     | jq -r '.date')
+    offer_fallback=$(echo "${offer}" | jq -r '.fallback // false')
 
-    local offer_price offer_flight offer_date
-    offer_price=$(echo "${offer}"  | jq -r '.price')
-    offer_flight=$(echo "${offer}" | jq -r '.flight')
-    offer_date=$(echo "${offer}"   | jq -r '.date')
-
+    # Only write history and last_price for cabin-accurate (non-fallback) results.
+    # Always update last_checked so `list` reflects that the initial scan ran.
     tmp=$(mktemp)
-    jq --arg id "${monitor_id}" \
-       --argjson price "${offer_price}" \
-       --arg flight "${offer_flight}" \
-       --arg ts "$(now_iso)" \
-       'map(if .id == $id then .last_price = $price | .last_flight = $flight | .last_checked = $ts else . end)' \
-       "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
+    if [ "${offer_fallback}" = "false" ]; then
+      append_history "${monitor_id}" "${offer}"
+      jq --arg id "${monitor_id}" \
+         --argjson price "${offer_price}" \
+         --arg flight "${offer_flight}" \
+         --arg ts "$(now_iso)" \
+         'map(if .id == $id then .last_price = $price | .last_flight = $flight | .last_checked = $ts else . end)' \
+         "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
+    else
+      jq --arg id "${monitor_id}" \
+         --arg ts "$(now_iso)" \
+         'map(if .id == $id then .last_checked = $ts else . end)' \
+         "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
+    fi
 
-    link=$(flights_link "${origin}" "${dest}" "${offer_date}" "${cabin}")
+    local offer_return_date link
+    offer_return_date=$(echo "${offer}" | jq -r '.return_date // ""')
+    link=$(flights_link "${origin}" "${dest}" "${offer_date}" "${cabin}" "${offer_return_date}")
+    link_json="\"${link}\""
   else
     offer="null"
   fi
 
-  printf '{"status":"ok","monitor_id":"%s","discord_channel_id":"%s","current_offer":%s,"google_flights":"%s"}\n' \
-    "${monitor_id}" "${discord_channel}" "${offer:-null}" "${link}"
+  printf '{"status":"ok","monitor_id":"%s","discord_channel_id":"%s","currency":"%s","current_offer":%s,"google_flights":%s}\n' \
+    "${monitor_id}" "${discord_channel}" "${currency}" "${offer}" "${link_json}"
 }
 
 # ─── CMD: list ────────────────────────────────────────────────────────────────
@@ -439,6 +534,10 @@ cmd_remove() {
   [ -z "${monitor_id}" ] && die "Usage: flight-monitor remove <monitor-id>"
 
   ensure_dirs
+
+  local exists
+  exists=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .id' "${MONITORS_FILE}")
+  [ -z "${exists}" ] && die "Monitor not found: ${monitor_id}"
 
   local cron_id
   cron_id=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .cron_job_id // ""' "${MONITORS_FILE}")
@@ -468,6 +567,10 @@ cmd_set_cron() {
 
   ensure_dirs
 
+  local exists
+  exists=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .id' "${MONITORS_FILE}")
+  [ -z "${exists}" ] && die "Monitor not found: ${monitor_id}"
+
   local tmp
   tmp=$(mktemp)
   jq --arg id "${monitor_id}" --arg cron "${cron_id}" \
@@ -483,8 +586,13 @@ calc_average_price() {
   local monitor_id="$1" days="$2"
   local hist_file="${HISTORY_DIR}/${monitor_id}.csv"
   [ -f "${hist_file}" ] || return 1
+  # Compute the ISO timestamp for N days ago and filter rows by the timestamp column (col 1)
+  local cutoff
+  cutoff=$(date -u -d "-${days} days" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null \
+        || date -u -v-"${days}"d +"%Y-%m-%dT%H:%M:%SZ")
   local prices
-  prices=$(tail -n "+2" "${hist_file}" | tail -n "${days}" | cut -d',' -f3 | grep -E '^[0-9]+(\.[0-9]+)?$')
+  prices=$(tail -n "+2" "${hist_file}" | awk -F',' -v cutoff="${cutoff}" '$1 >= cutoff {print $3}' \
+           | grep -E '^[0-9]+(\.[0-9]+)?$')
   [ -z "${prices}" ] && return 1
   echo "${prices}" | awk '{sum+=$1; count++} END{if(count>0) printf "%.2f", sum/count; else exit 1}'
 }
@@ -506,51 +614,82 @@ cmd_check() {
   local token
   token=$(get_token)
 
-  local alert_days discord_channel_id
-  alert_days=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .alert_days // 7' "${MONITORS_FILE}")
+  local alert_days discord_channel_id depart_date flex_days currency
+  alert_days=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .alert_days // 7'           "${MONITORS_FILE}")
   discord_channel_id=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .discord_channel_id // ""' "${MONITORS_FILE}")
+  depart_date=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .depart_date'               "${MONITORS_FILE}")
+  flex_days=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .flex_days // 0'              "${MONITORS_FILE}")
+  currency=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .currency // "CNY"'            "${MONITORS_FILE}")
 
-  local offer
-  if ! offer=$(search_flexible "${monitor_id}" "${token}"); then
-    printf '{"status":"ok","monitor_id":"%s","discord_channel_id":"%s","price":null,"average_price":null,"days_in_avg":null,"below_average":null,"offer":null}\n' \
-      "${monitor_id}" "${discord_channel_id}"
+  # Detect fully-expired monitors before hitting the API: if every candidate date
+  # (depart_date ± flex_days) is already in the past, no request would ever succeed.
+  local base_epoch today_epoch latest_candidate
+  base_epoch=$(date -d "${depart_date}" +%s 2>/dev/null || date -j -f "%Y-%m-%d" "${depart_date}" +%s)
+  today_epoch=$(now_epoch)
+  local capped_flex=$(( flex_days > 7 ? 7 : flex_days ))
+  latest_candidate=$(( base_epoch + capped_flex * 86400 ))
+  if [ "${latest_candidate}" -lt "${today_epoch}" ]; then
+    printf '{"status":"expired","monitor_id":"%s","discord_channel_id":"%s","reason":"depart_date %s (+/-%s days) is in the past — update the monitor with a future date"}\n' \
+      "${monitor_id}" "${discord_channel_id}" "${depart_date}" "${capped_flex}"
     exit 0
   fi
 
-  append_history "${monitor_id}" "${offer}"
+  local offer
+  if ! offer=$(search_flexible "${monitor_id}" "${token}"); then
+    printf '{"status":"ok","monitor_id":"%s","discord_channel_id":"%s","currency":"%s","price":null,"average_price":null,"days_in_avg":null,"below_average":null,"fallback_price":null,"offer":null,"google_flights":null}\n' \
+      "${monitor_id}" "${discord_channel_id}" "${currency}"
+    exit 0
+  fi
 
-  local offer_price offer_flight
-  offer_price=$(echo "${offer}"  | jq -r '.price')
-  offer_flight=$(echo "${offer}" | jq -r '.flight')
+  local offer_price offer_flight offer_fallback
+  offer_price=$(echo "${offer}"    | jq -r '.price')
+  offer_flight=$(echo "${offer}"   | jq -r '.flight')
+  offer_fallback=$(echo "${offer}" | jq -r '.fallback // false')
 
-  local tmp
-  tmp=$(mktemp)
-  jq --arg id "${monitor_id}" \
-     --argjson price "${offer_price}" \
-     --arg flight "${offer_flight}" \
-     --arg ts "$(now_iso)" \
-     'map(if .id == $id then .last_price = $price | .last_flight = $flight | .last_checked = $ts else . end)' \
-     "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
-
-  local average_price below_average="false" days_in_avg="null"
-  if average_price=$(calc_average_price "${monitor_id}" "${alert_days}"); then
-    local hist_count
-    hist_count=$(tail -n "+2" "${HISTORY_DIR}/${monitor_id}.csv" | wc -l | tr -d ' ')
-    days_in_avg=$(( hist_count < alert_days ? hist_count : alert_days ))
+  # Calculate average from history BEFORE appending current price, so the
+  # current offer is not included in the baseline it is being compared against.
+  # Skip comparison entirely for fallback offers: comparing an any-cabin price
+  # against a cabin-specific average produces meaningless results.
+  local average_price below_average="null" days_in_avg="null"
+  if [ "${offer_fallback}" = "false" ] && average_price=$(calc_average_price "${monitor_id}" "${alert_days}"); then
+    days_in_avg="${alert_days}"
+    below_average="false"
     awk "BEGIN{exit!(${offer_price}<${average_price})}" && below_average="true" || true
   else
     average_price="null"
   fi
 
-  local origin dest cabin offer_date link
+  # Fallback offers (any-cabin) are not written to history to avoid polluting
+  # the cabin-specific price baseline used for average comparisons.
+  # last_price / last_flight / last_checked are only updated for non-fallback results
+  # so that `list` always reflects a cabin-accurate price.
+  local tmp
+  tmp=$(mktemp)
+  if [ "${offer_fallback}" = "false" ]; then
+    append_history "${monitor_id}" "${offer}"
+    jq --arg id "${monitor_id}" \
+       --argjson price "${offer_price}" \
+       --arg flight "${offer_flight}" \
+       --arg ts "$(now_iso)" \
+       'map(if .id == $id then .last_price = $price | .last_flight = $flight | .last_checked = $ts else . end)' \
+       "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
+  else
+    jq --arg id "${monitor_id}" \
+       --arg ts "$(now_iso)" \
+       'map(if .id == $id then .last_checked = $ts else . end)' \
+       "${MONITORS_FILE}" > "${tmp}" && mv "${tmp}" "${MONITORS_FILE}"
+  fi
+
+  local origin dest cabin offer_date offer_return_date link
   origin=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .origin'      "${MONITORS_FILE}")
   dest=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .destination'   "${MONITORS_FILE}")
   cabin=$(jq -r --arg id "${monitor_id}" '.[] | select(.id==$id) | .cabin'        "${MONITORS_FILE}")
   offer_date=$(echo "${offer}" | jq -r '.date')
-  link=$(flights_link "${origin}" "${dest}" "${offer_date}" "${cabin}")
+  offer_return_date=$(echo "${offer}" | jq -r '.return_date // ""')
+  link=$(flights_link "${origin}" "${dest}" "${offer_date}" "${cabin}" "${offer_return_date}")
 
-  printf '{"status":"ok","monitor_id":"%s","discord_channel_id":"%s","price":%s,"average_price":%s,"days_in_avg":%s,"below_average":%s,"offer":%s,"google_flights":"%s"}\n' \
-    "${monitor_id}" "${discord_channel_id}" "${offer_price}" "${average_price}" "${days_in_avg}" "${below_average}" "${offer}" "${link}"
+  printf '{"status":"ok","monitor_id":"%s","discord_channel_id":"%s","currency":"%s","price":%s,"average_price":%s,"days_in_avg":%s,"below_average":%s,"fallback_price":%s,"offer":%s,"google_flights":"%s"}\n' \
+    "${monitor_id}" "${discord_channel_id}" "${currency}" "${offer_price}" "${average_price}" "${days_in_avg}" "${below_average}" "${offer_fallback}" "${offer}" "${link}"
 }
 
 # ─── CMD: debug ───────────────────────────────────────────────────────────────
@@ -593,7 +732,8 @@ cmd_debug() {
 
   # Step 2: Raw flight search
   info "--- Step 2: Flight Offers Search ---"
-  local url="${AMADEUS_BASE}/v2/shopping/flight-offers?originLocationCode=${origin}&destinationLocationCode=${dest}&departureDate=${date}&adults=1&max=3&currencyCode=CNY"
+  local debug_currency="${AMADEUS_CURRENCY:-CNY}"
+  local url="${AMADEUS_BASE}/v2/shopping/flight-offers?originLocationCode=${origin}&destinationLocationCode=${dest}&departureDate=${date}&adults=1&max=3&currencyCode=${debug_currency}"
   info "URL: ${url}"
   info ""
 

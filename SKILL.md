@@ -70,16 +70,17 @@ Optional — only ask if ambiguous or user mentioned them:
 
 ```bash
 flight-monitor add \
-  --origin PEK \
-  --destination LHR \
-  --depart-date 2025-06-15 \
+  --origin <ORIGIN_IATA> \
+  --destination <DEST_IATA> \
+  --depart-date <YYYY-MM-DD> \
   --discord-channel <channel-id> \
   --alert-days 7 \
   --flex-days 3 \
-  --cabin BUSINESS \
-  [--return-date 2025-06-30] \
+  --cabin ECONOMY \
+  [--return-date <YYYY-MM-DD>] \
   [--nonstop] \
-  [--airlines CA,CX]
+  [--airlines XX,YY] \
+  [--check-interval 1d]
 ```
 
 Note the `monitor_id` from the JSON output.
@@ -119,13 +120,23 @@ flight-monitor set-cron --monitor-id <MONITOR_ID> --cron-id "${CRON_ID}"
 ```
 ✅ Flight monitor created
 
-🔍 Monitor: fm-abc123
-✈️  PEK → LHR | 15 Jun ±3 days | Business
-📉 Alert when price drops below 7-day average
-⏰ Checking every 1 day
-📊 Current lowest: ¥6,240 (CA937, 16 Jun)
+🔍 Monitor: {monitor_id}
+✈️  {origin} → {destination} | {depart_date} ±{flex_days} days | {cabin}
+📉 Alert when price drops below {alert_days}-day average
+⏰ Checking every {check_interval}
+📊 Current lowest: {currency}{current_offer.price} ({current_offer.flight}, {current_offer.date})
 
 I'll send price updates to your Discord channel.
+```
+
+If `current_offer` is `null` (no flights found during add), replace the last line with:
+```
+📊 No flights found yet — will check on the first cron run.
+```
+
+If `current_offer.fallback` is `true`, the price is from a non-{cabin} seat (no {cabin} availability found). Append:
+```
+⚠️ No {cabin} seats found during initial scan — price shown is cheapest available cabin.
 ```
 
 ---
@@ -136,7 +147,7 @@ I'll send price updates to your Discord channel.
 flight-monitor list
 ```
 
-Format the JSON as a readable table: ID, route, date/flex, cabin, target, last price, last checked, status.
+Format the JSON as a readable table: ID, route, date/flex, cabin, alert_days, last price, last checked, status.
 
 ---
 
@@ -181,38 +192,45 @@ When woken by cron with a `flight-monitor check <ID>` instruction:
 
 1. Run `flight-monitor check <MONITOR_ID>`
 2. **Always** compose and send a reply — the `--announce` flag on the cron job delivers it to the bound Discord channel. Never skip the reply.
-3. Format the reply based on the JSON output:
+3. Format the reply based on the JSON output. Use `currency` from the top-level JSON field for all price formatting (e.g. `CNY`, `USD`):
 
 **If `below_average` is `true`:**
 ```
 ✈️ Price Drop Alert!
-PEK → LHR | 16 Jun | Business
-Current lowest: ¥4,820 (CA937)
-📉 Below 7-day average of ¥5,340
+{origin} → {destination} | {offer.date} | {cabin}
+Current lowest: {currency}{offer.price} ({offer.flight})
+📉 Below {days_in_avg}-day average of {currency}{average_price}
 
-Book → <google_flights link>
+Book → {google_flights}
 ```
 
 **If `below_average` is `false`:**
 ```
 ✈️ Flight Price Update
-PEK → LHR | 16 Jun | Business
-Current lowest: ¥5,610 (CA937)
-📊 7-day average: ¥5,340 (currently above average)
+{origin} → {destination} | {offer.date} | {cabin}
+Current lowest: {currency}{offer.price} ({offer.flight})
+📊 {days_in_avg}-day average: {currency}{average_price} (currently above average)
 
-Book → <google_flights link>
+Book → {google_flights}
 ```
 
 **If `price` is `null` (no flights found):**
 ```
 ✈️ Flight Price Update
-PEK → LHR | Business
+{origin} → {destination} | {cabin}
 No flights found for this check — will retry next run.
 ```
 
+**If `status` is `"expired"` (depart_date is in the past):**
+```
+⚠️ Flight monitor {monitor_id} has expired.
+The departure date {depart_date} is in the past.
+Please remove this monitor and add a new one with an updated date.
+```
+
 Notes:
-- `days_in_avg` in the output reflects how many actual data points were averaged (may be less than `alert_days` for a new monitor)
-- When `average_price` is `null` (first ever check), omit the average line and just report the current price
+- When `average_price` is `null` (first ever check or no history in window), omit the average line and just report the current price; `below_average` will also be `null`
+- When `fallback_price` is `true`, the price is for the cheapest available cabin (not the requested cabin class) because no seats were found in the requested class. Append a note: "⚠️ No {cabin} seats found — price shown is cheapest available cabin." Do not report `below_average` in this case since the price is not comparable to the cabin-specific history
 
 ---
 
