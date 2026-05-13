@@ -23,6 +23,11 @@ export async function resolveIata(input: string, token: string): Promise<string>
     die(`Location lookup failed for: ${input}`);
   }
 
+  if (!resp.ok) {
+    const errBody = await resp.text().catch(() => "");
+    die(`Amadeus location lookup error ${resp.status}: ${errBody.slice(0, 300)}`);
+  }
+
   const data = (await resp.json()) as { data?: Array<{ subType: string; iataCode: string }> };
   const airports = (data.data ?? []).filter((d) => d.subType === "AIRPORT");
   const iata = airports[0]?.iataCode ?? data.data?.[0]?.iataCode;
@@ -50,7 +55,7 @@ export async function searchOneDate(
 
   if (!resp.ok) {
     const body = await resp.text().catch(() => "");
-    info(`Amadeus flight-offers error ${resp.status}: ${body}`);
+    info(`Amadeus flight-offers error ${resp.status}: ${body.slice(0, 300)}`);
     return null;
   }
 
