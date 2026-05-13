@@ -22,11 +22,16 @@ export async function cmdSetup(args: string[]): Promise<void> {
   let currency = "";
   let installCli = true;
 
+  const req = (flag: string, val: string | undefined): string => {
+    if (!val) die(`${flag} requires a value`);
+    return val;
+  };
+
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
-      case "--client-id":     clientId = args[++i]; break;
-      case "--client-secret": clientSecret = args[++i]; break;
-      case "--currency":      currency = args[++i]; break;
+      case "--client-id":     clientId = req("--client-id", args[++i]); break;
+      case "--client-secret": clientSecret = req("--client-secret", args[++i]); break;
+      case "--currency":      currency = req("--currency", args[++i]); break;
       case "--no-install":    installCli = false; break;
       default: die(`Unknown option: ${args[i]}`);
     }
