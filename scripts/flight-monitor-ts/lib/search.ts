@@ -1,5 +1,5 @@
 import { AMADEUS_BASE, MONITORS_FILE, type Monitor } from "./config.js";
-import { die, nowEpoch, shiftDate, dateToEpoch } from "./utils.js";
+import { die, info, todayMidnightEpoch, shiftDate, dateToEpoch } from "./utils.js";
 import { readFileSync } from "node:fs";
 
 export interface Offer {
@@ -23,6 +23,11 @@ export async function resolveIata(input: string, token: string): Promise<string>
     die(`Location lookup failed for: ${input}`);
   }
 
+  if (!resp.ok) {
+    const errBody = await resp.text().catch(() => "");
+    die(`Amadeus location lookup error ${resp.status}: ${errBody.slice(0, 300)}`);
+  }
+
   const data = (await resp.json()) as { data?: Array<{ subType: string; iataCode: string }> };
   const airports = (data.data ?? []).filter((d) => d.subType === "AIRPORT");
   const iata = airports[0]?.iataCode ?? data.data?.[0]?.iataCode;
@@ -35,15 +40,22 @@ export async function searchOneDate(
   dest: string,
   date: string,
   token: string,
-  extraParams?: string
+  extraParams?: string,
+  adults = 1
 ): Promise<Offer | null> {
-  const base = `${AMADEUS_BASE}/v2/shopping/flight-offers?originLocationCode=${origin}&destinationLocationCode=${dest}&departureDate=${date}`;
+  const base = `${AMADEUS_BASE}/v2/shopping/flight-offers?originLocationCode=${origin}&destinationLocationCode=${dest}&departureDate=${date}&adults=${adults}`;
   const url = extraParams ? `${base}&${extraParams}` : base;
 
   let resp: Response;
   try {
     resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
   } catch {
+    return null;
+  }
+
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    info(`Amadeus flight-offers error ${resp.status}: ${body.slice(0, 300)}`);
     return null;
   }
 
@@ -78,7 +90,7 @@ async function searchWithParams(
 ): Promise<Offer | null> {
   const flexDays = Math.min(monitor.flex_days, 7);
   const baseEpoch = dateToEpoch(monitor.depart_date);
-  const todayEpoch = nowEpoch();
+  const todayEpoch = todayMidnightEpoch();
   const returnEpoch = monitor.return_date ? dateToEpoch(monitor.return_date) : 0;
 
   let bestPrice: number | null = null;
@@ -96,7 +108,7 @@ async function searchWithParams(
       iterParams = `${iterParams}&returnDate=${iterReturnDate}`;
     }
 
-    const offer = await searchOneDate(monitor.origin, monitor.destination, checkDate, token, iterParams);
+    const offer = await searchOneDate(monitor.origin, monitor.destination, checkDate, token, iterParams, monitor.adults);
     await new Promise((r) => setTimeout(r, 500));
     if (!offer) continue;
 
@@ -117,7 +129,7 @@ export async function searchFlexible(monitorId: string, token: string): Promise<
   if (!monitor) die(`Monitor not found: ${monitorId}`);
 
   const airlines = monitor.airlines?.join(",") ?? "";
-  let paramsBase = `adults=${monitor.adults}&travelClass=${monitor.cabin}&currencyCode=${monitor.currency}&max=5`;
+  let paramsBase = `travelClass=${monitor.cabin}&currencyCode=${monitor.currency}&max=5`;
   if (monitor.nonstop) paramsBase += "&nonStop=true";
   if (airlines) paramsBase += `&includedAirlineCodes=${airlines}`;
 
@@ -125,7 +137,7 @@ export async function searchFlexible(monitorId: string, token: string): Promise<
   if (offer) return offer;
 
   // Fallback: strip travelClass / nonStop / airlines
-  const fallbackParams = `adults=${monitor.adults}&currencyCode=${monitor.currency}&max=5`;
+  const fallbackParams = `currencyCode=${monitor.currency}&max=5`;
   const fallbackOffer = await searchWithParams(monitor, token, fallbackParams);
   if (fallbackOffer) return { ...fallbackOffer, fallback: true };
 

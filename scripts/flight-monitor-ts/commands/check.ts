@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { MONITORS_FILE, loadCredentials, type Monitor } from "../lib/config.js";
-import { die, ensureDirs, flightsLink, nowIso, nowEpoch, dateToEpoch, shiftDate } from "../lib/utils.js";
+import { die, ensureDirs, flightsLink, nowIso, todayMidnightEpoch, dateToEpoch } from "../lib/utils.js";
 import { getToken } from "../lib/auth.js";
 import { searchFlexible } from "../lib/search.js";
 import { appendHistory, calcAveragePrice } from "../lib/history.js";
@@ -23,7 +23,7 @@ export async function cmdCheck(args: string[]): Promise<void> {
 
   // Detect fully-expired monitors before hitting the API
   const baseEpoch = dateToEpoch(monitor.depart_date);
-  const todayEpoch = nowEpoch();
+  const todayEpoch = todayMidnightEpoch();
   const cappedFlex = Math.min(monitor.flex_days, 7);
   const latestCandidate = baseEpoch + cappedFlex * 86400;
 

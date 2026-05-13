@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { TOKEN_CACHE, AMADEUS_BASE } from "./config.js";
-import { die, nowEpoch } from "./utils.js";
+import { die, info, nowEpoch } from "./utils.js";
 
 export async function getToken(clientId: string, clientSecret: string): Promise<string> {
   if (existsSync(TOKEN_CACHE)) {
@@ -25,6 +25,11 @@ export async function getToken(clientId: string, clientSecret: string): Promise<
     });
   } catch {
     die("Amadeus auth failed. Check credentials.");
+  }
+
+  if (!resp.ok) {
+    const errBody = await resp.text().catch(() => "");
+    die(`Amadeus auth error ${resp.status}: ${errBody.slice(0, 300)}`);
   }
 
   const data = (await resp.json()) as Record<string, unknown>;

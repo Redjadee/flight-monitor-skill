@@ -19,6 +19,11 @@ export function nowEpoch(): number {
   return Math.floor(Date.now() / 1000);
 }
 
+/** Unix epoch of today's midnight UTC (no time-of-day component). */
+export function todayMidnightEpoch(): number {
+  return dateToEpoch(new Date().toISOString().slice(0, 10));
+}
+
 export function genId(): string {
   return Math.floor(Math.random() * 0xffffffff)
     .toString(16)
