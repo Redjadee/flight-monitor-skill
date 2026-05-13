@@ -1,0 +1,78 @@
+import { existsSync, readFileSync, writeFileSync, chmodSync, copyFileSync } from "node:fs";
+import { execSync } from "node:child_process";
+import { CONFIG_FILE, INSTALL_BIN } from "../lib/config.js";
+import { die, info, ensureDirs, requireCmds } from "../lib/utils.js";
+import { getToken } from "../lib/auth.js";
+
+export async function cmdSetup(args: string[]): Promise<void> {
+  requireCmds("curl", "jq");
+
+  let clientId = "";
+  let clientSecret = "";
+  let currency = "";
+  let installCli = true;
+  let binPath = INSTALL_BIN;
+
+  for (let i = 0; i < args.length; i++) {
+    switch (args[i]) {
+      case "--client-id":     clientId = args[++i]; break;
+      case "--client-secret": clientSecret = args[++i]; break;
+      case "--currency":      currency = args[++i]; break;
+      case "--bin-path":      binPath = args[++i]; break;
+      case "--no-install":    installCli = false; break;
+      default: die(`Unknown option: ${args[i]}`);
+    }
+  }
+
+  // Load existing config so re-running without flags reuses saved credentials
+  if (existsSync(CONFIG_FILE)) {
+    for (const line of readFileSync(CONFIG_FILE, "utf8").split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eq = trimmed.indexOf("=");
+      if (eq === -1) continue;
+      const key = trimmed.slice(0, eq);
+      const val = trimmed.slice(eq + 1).replace(/^"|"$/g, "");
+      if (key === "AMADEUS_CLIENT_ID" && !clientId) clientId = val;
+      if (key === "AMADEUS_CLIENT_SECRET" && !clientSecret) clientSecret = val;
+      if (key === "AMADEUS_CURRENCY" && !currency) currency = val;
+    }
+  }
+
+  if (!currency) currency = "CNY";
+  if (!clientId) die("--client-id is required (or run setup after credentials are already configured)");
+  if (!clientSecret) die("--client-secret is required (or run setup after credentials are already configured)");
+
+  ensureDirs();
+
+  info("Validating Amadeus credentials...");
+  process.env.AMADEUS_CLIENT_ID = clientId;
+  process.env.AMADEUS_CLIENT_SECRET = clientSecret;
+  await getToken(clientId, clientSecret);
+  info("  ✓ Credentials valid");
+
+  const configContent = `AMADEUS_CLIENT_ID="${clientId}"\nAMADEUS_CLIENT_SECRET="${clientSecret}"\nAMADEUS_CURRENCY="${currency}"\n`;
+  writeFileSync(CONFIG_FILE, configContent, "utf8");
+  chmodSync(CONFIG_FILE, 0o600);
+  info(`  ✓ Config written to ${CONFIG_FILE}`);
+
+  if (installCli) {
+    const selfPath = process.argv[1];
+    info(`Installing flight-monitor CLI to ${binPath}...`);
+    try {
+      copyFileSync(selfPath, binPath);
+      chmodSync(binPath, 0o755);
+      info(`  ✓ Installed to ${binPath}`);
+    } catch {
+      info("  ✗ Permission denied. Retrying with sudo...");
+      try {
+        execSync(`sudo cp "${selfPath}" "${binPath}" && sudo chmod +x "${binPath}"`);
+        info(`  ✓ Installed to ${binPath} (via sudo)`);
+      } catch {
+        info(`  ✗ Could not install. Add the script directory to your PATH manually.`);
+      }
+    }
+  }
+
+  process.stdout.write(`{"status":"ok","message":"flight-monitor ready","config":"${CONFIG_FILE}"}\n`);
+}
