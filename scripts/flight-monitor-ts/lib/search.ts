@@ -1,5 +1,5 @@
 import { AMADEUS_BASE, MONITORS_FILE, type Monitor } from "./config.js";
-import { die, nowEpoch, shiftDate, dateToEpoch } from "./utils.js";
+import { die, info, todayMidnightEpoch, shiftDate, dateToEpoch } from "./utils.js";
 import { readFileSync } from "node:fs";
 
 export interface Offer {
@@ -48,6 +48,12 @@ export async function searchOneDate(
     return null;
   }
 
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    info(`Amadeus flight-offers error ${resp.status}: ${body}`);
+    return null;
+  }
+
   const data = (await resp.json()) as {
     data?: Array<{
       price: { grandTotal?: string; total?: string };
@@ -79,7 +85,7 @@ async function searchWithParams(
 ): Promise<Offer | null> {
   const flexDays = Math.min(monitor.flex_days, 7);
   const baseEpoch = dateToEpoch(monitor.depart_date);
-  const todayEpoch = nowEpoch();
+  const todayEpoch = todayMidnightEpoch();
   const returnEpoch = monitor.return_date ? dateToEpoch(monitor.return_date) : 0;
 
   let bestPrice: number | null = null;
