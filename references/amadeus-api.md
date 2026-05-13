@@ -31,14 +31,21 @@ Authorization: Bearer <token>
 |-------|----------|------|-------|
 | `originLocationCode` | ✅ | string | IATA airport code |
 | `destinationLocationCode` | ✅ | string | IATA airport code |
-| `departureDate` | ✅ | string | YYYY-MM-DD |
-| `adults` | ✅ | integer | Min 1 |
+| `departureDate` | ✅ | string | YYYY-MM-DD; **must be a future date** — past dates return empty `data[]` |
+| `adults` | ✅ | integer | Min 1, max 9 |
 | `returnDate` | ❌ | string | YYYY-MM-DD, for round trips |
-| `travelClass` | ❌ | string | ECONOMY, PREMIUM_ECONOMY, BUSINESS, FIRST |
-| `nonStop` | ❌ | bool | true = direct flights only |
-| `includedAirlineCodes` | ❌ | string | Comma-separated IATA codes e.g. "CA,CX" |
-| `max` | ❌ | integer | Max results, use 5 for monitoring |
-| `currencyCode` | ❌ | string | e.g. CNY, USD |
+| `travelClass` | ❌ | string | ECONOMY, PREMIUM_ECONOMY, BUSINESS, FIRST — **filters for that cabin or higher; returns empty `data[]` if no qualifying seats exist on that route/date** |
+| `nonStop` | ❌ | bool | true = direct flights only; can produce empty results if no nonstop option |
+| `includedAirlineCodes` | ❌ | string | Comma-separated IATA codes e.g. "CA,CX"; mutually exclusive with `excludedAirlineCodes` |
+| `max` | ❌ | integer | Max results (default 250); use 5 for monitoring |
+| `currencyCode` | ❌ | string | ISO 4217, e.g. CNY, USD |
+
+> **Why `debug` works but `check` returns no flights:**
+> `debug` uses today+30d (always future) and no `travelClass` filter.
+> `check` uses `depart_date` from monitors.json plus `travelClass`. Two failure modes:
+> 1. `depart_date` (± flex_days) is entirely in the past → all dates skipped, zero API calls made
+> 2. `travelClass=BUSINESS` on a route with no business seats → API returns empty `data[]`
+> The fallback search drops `travelClass` as a last resort to at least confirm route availability.
 
 ### Response: Extracting the Cheapest Offer
 
