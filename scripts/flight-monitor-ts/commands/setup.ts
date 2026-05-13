@@ -71,14 +71,22 @@ export async function cmdSetup(args: string[]): Promise<void> {
 
   if (installCli) {
     const pkgDir = findPkgDir();
+    info(`Building flight-monitor CLI...`);
+    try {
+      execSync(`npm install`, { cwd: pkgDir, stdio: "pipe" });
+      execSync(`"${join(pkgDir, "node_modules/.bin/tsc")}"`, { cwd: pkgDir, stdio: "pipe" });
+      info(`  ✓ Built successfully`);
+    } catch (buildErr) {
+      die(`Build failed: ${String(buildErr)}`);
+    }
     info(`Installing flight-monitor CLI globally...`);
     try {
-      execSync(`npm install -g "${pkgDir}"`, { stdio: "pipe" });
+      execSync(`npm install -g "${pkgDir}" --ignore-scripts`, { stdio: "pipe" });
       info(`  ✓ Installed globally`);
     } catch {
       info("  ✗ Permission denied. Retrying with sudo...");
       try {
-        execSync(`sudo npm install -g "${pkgDir}"`, { stdio: "pipe" });
+        execSync(`sudo npm install -g "${pkgDir}" --ignore-scripts`, { stdio: "pipe" });
         info(`  ✓ Installed globally (via sudo)`);
       } catch {
         info(`  ✗ Could not install globally. Run manually: npm install -g "${pkgDir}"`);
