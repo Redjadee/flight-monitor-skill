@@ -43,11 +43,6 @@ export function loadCredentials(): Credentials {
   return { clientId, clientSecret, currency };
 }
 
-export function readMonitors(): unknown[] {
-  if (!existsSync(MONITORS_FILE)) return [];
-  return JSON.parse(readFileSync(MONITORS_FILE, "utf8")) as unknown[];
-}
-
 export interface Monitor {
   id: string;
   origin: string;
