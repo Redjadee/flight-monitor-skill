@@ -1,24 +1,21 @@
-import { existsSync, readFileSync, writeFileSync, chmodSync, copyFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
 import { execSync } from "node:child_process";
-import { CONFIG_FILE, INSTALL_BIN } from "../lib/config.js";
-import { die, info, ensureDirs, requireCmds } from "../lib/utils.js";
+import { fileURLToPath } from "node:url";
+import { CONFIG_FILE } from "../lib/config.js";
+import { die, info, ensureDirs } from "../lib/utils.js";
 import { getToken } from "../lib/auth.js";
 
 export async function cmdSetup(args: string[]): Promise<void> {
-  requireCmds("curl", "jq");
-
   let clientId = "";
   let clientSecret = "";
   let currency = "";
   let installCli = true;
-  let binPath = INSTALL_BIN;
 
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
       case "--client-id":     clientId = args[++i]; break;
       case "--client-secret": clientSecret = args[++i]; break;
       case "--currency":      currency = args[++i]; break;
-      case "--bin-path":      binPath = args[++i]; break;
       case "--no-install":    installCli = false; break;
       default: die(`Unknown option: ${args[i]}`);
     }
@@ -57,22 +54,22 @@ export async function cmdSetup(args: string[]): Promise<void> {
   info(`  ✓ Config written to ${CONFIG_FILE}`);
 
   if (installCli) {
-    const selfPath = process.argv[1];
-    info(`Installing flight-monitor CLI to ${binPath}...`);
+    // Resolve package root from dist/commands/setup.js → two levels up
+    const pkgDir = fileURLToPath(new URL("../../", import.meta.url));
+    info(`Installing flight-monitor CLI globally...`);
     try {
-      copyFileSync(selfPath, binPath);
-      chmodSync(binPath, 0o755);
-      info(`  ✓ Installed to ${binPath}`);
+      execSync(`npm install -g "${pkgDir}"`, { stdio: "pipe" });
+      info(`  ✓ Installed globally`);
     } catch {
       info("  ✗ Permission denied. Retrying with sudo...");
       try {
-        execSync(`sudo cp "${selfPath}" "${binPath}" && sudo chmod +x "${binPath}"`);
-        info(`  ✓ Installed to ${binPath} (via sudo)`);
+        execSync(`sudo npm install -g "${pkgDir}"`, { stdio: "pipe" });
+        info(`  ✓ Installed globally (via sudo)`);
       } catch {
-        info(`  ✗ Could not install. Add the script directory to your PATH manually.`);
+        info(`  ✗ Could not install globally. Run manually: npm install -g "${pkgDir}"`);
       }
     }
   }
 
-  process.stdout.write(`{"status":"ok","message":"flight-monitor ready","config":"${CONFIG_FILE}"}\n`);
+  process.stdout.write(JSON.stringify({ status: "ok", message: "flight-monitor ready", config: CONFIG_FILE }) + "\n");
 }

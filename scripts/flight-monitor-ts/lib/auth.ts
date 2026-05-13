@@ -16,16 +16,11 @@ export async function getToken(clientId: string, clientSecret: string): Promise<
     client_secret: clientSecret,
   });
 
-  let resp: Response;
-  try {
-    resp = await fetch(`${AMADEUS_BASE}/v1/security/oauth2/token`, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: body.toString(),
-    });
-  } catch {
-    die("Amadeus auth failed. Check credentials.");
-  }
+  const resp = await fetch(`${AMADEUS_BASE}/v1/security/oauth2/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  }).catch(() => die("Amadeus auth failed. Check network/credentials."));
 
   if (!resp.ok) {
     const errBody = await resp.text().catch(() => "");

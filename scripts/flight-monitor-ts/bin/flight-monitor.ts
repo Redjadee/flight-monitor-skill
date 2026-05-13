@@ -13,8 +13,7 @@ function usage(): void {
 
 Usage:
   flight-monitor setup      --client-id <id> --client-secret <secret>
-                            [--currency CNY] [--bin-path /usr/local/bin/flight-monitor]
-                            [--no-install]
+                            [--currency CNY] [--no-install]
 
   flight-monitor add        --origin <IATA|city> --destination <IATA|city>
                             --depart-date <YYYY-MM-DD> --discord-channel <channel-id>
@@ -51,12 +50,12 @@ async function main(): Promise<void> {
     case "help":            usage(); break;
     case undefined:         usage(); break;
     default:
-      process.stderr.write(`{"error":"Unknown command: ${cmd}. Run 'flight-monitor help'"}\n`);
+      process.stderr.write(JSON.stringify({ error: `Unknown command: ${cmd}. Run 'flight-monitor help'` }) + "\n");
       process.exit(1);
   }
 }
 
 main().catch((err: unknown) => {
-  process.stderr.write(`{"error":"${String(err)}"}\n`);
+  process.stderr.write(JSON.stringify({ error: String(err) }) + "\n");
   process.exit(1);
 });
