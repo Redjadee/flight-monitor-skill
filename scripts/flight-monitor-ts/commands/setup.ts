@@ -71,5 +71,5 @@ export async function cmdSetup(args: string[]): Promise<void> {
     }
   }
 
-  process.stdout.write(`{"status":"ok","message":"flight-monitor ready","config":"${CONFIG_FILE}"}\n`);
+  process.stdout.write(JSON.stringify({ status: "ok", message: "flight-monitor ready", config: CONFIG_FILE }) + "\n");
 }
