@@ -10,7 +10,6 @@ export const HISTORY_DIR = join(FM_DIR, "history");
 export const TOKEN_CACHE = join(FM_DIR, ".token_cache");
 
 export const AMADEUS_BASE = "https://api.amadeus.com";
-export const INSTALL_BIN = "/usr/local/bin/flight-monitor";
 
 export interface Credentials {
   clientId: string;

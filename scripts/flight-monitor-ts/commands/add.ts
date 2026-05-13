@@ -1,6 +1,5 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { MONITORS_FILE } from "../lib/config.js";
-import { loadCredentials, type Monitor } from "../lib/config.js";
+import { MONITORS_FILE, loadCredentials, type Monitor } from "../lib/config.js";
 import { die, ensureDirs, genId, nowIso, flightsLink, dateToEpoch, todayMidnightEpoch } from "../lib/utils.js";
 import { getToken } from "../lib/auth.js";
 import { resolveIata, searchFlexible } from "../lib/search.js";

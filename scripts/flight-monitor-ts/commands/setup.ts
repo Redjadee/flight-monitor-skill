@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, chmodSync, copyFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -21,6 +21,7 @@ export async function cmdSetup(args: string[]): Promise<void> {
   let clientSecret = "";
   let currency = "";
   let installCli = true;
+  let binPath = "";
 
   const req = (flag: string, val: string | undefined): string => {
     if (!val) die(`${flag} requires a value`);
@@ -32,6 +33,7 @@ export async function cmdSetup(args: string[]): Promise<void> {
       case "--client-id":     clientId = req("--client-id", args[++i]); break;
       case "--client-secret": clientSecret = req("--client-secret", args[++i]); break;
       case "--currency":      currency = req("--currency", args[++i]); break;
+      case "--bin-path":      binPath = req("--bin-path", args[++i]); break;
       case "--no-install":    installCli = false; break;
       default: die(`Unknown option: ${args[i]}`);
     }
@@ -77,19 +79,34 @@ export async function cmdSetup(args: string[]): Promise<void> {
       execSync(`"${join(pkgDir, "node_modules/.bin/tsc")}"`, { cwd: pkgDir, stdio: "pipe" });
       info(`  ✓ Built successfully`);
     } catch (buildErr) {
-      die(`Build failed: ${String(buildErr)}`);
+      const errDetail = (buildErr as { stderr?: Buffer }).stderr?.toString().trim() || String(buildErr);
+      die(`Build failed:\n${errDetail}`);
     }
-    info(`Installing flight-monitor CLI globally...`);
-    try {
-      execSync(`npm install -g "${pkgDir}" --ignore-scripts`, { stdio: "pipe" });
-      info(`  ✓ Installed globally`);
-    } catch {
-      info("  ✗ Permission denied. Retrying with sudo...");
+
+    const distBin = join(pkgDir, "dist/bin/flight-monitor.js");
+
+    if (binPath) {
+      // Custom install path — copy compiled binary directly (no sudo required for user dirs)
       try {
-        execSync(`sudo npm install -g "${pkgDir}" --ignore-scripts`, { stdio: "pipe" });
-        info(`  ✓ Installed globally (via sudo)`);
+        copyFileSync(distBin, binPath);
+        chmodSync(binPath, 0o755);
+        info(`  ✓ Installed to ${binPath}`);
       } catch {
-        info(`  ✗ Could not install globally. Run manually: npm install -g "${pkgDir}"`);
+        die(`Could not write to ${binPath}. Check the path exists and is writable.`);
+      }
+    } else {
+      info(`Installing flight-monitor CLI globally...`);
+      try {
+        execSync(`npm install -g "${pkgDir}" --ignore-scripts`, { stdio: "pipe" });
+        info(`  ✓ Installed globally`);
+      } catch {
+        info("  ✗ Permission denied. Retrying with sudo...");
+        try {
+          execSync(`sudo npm install -g "${pkgDir}" --ignore-scripts`, { stdio: "pipe" });
+          info(`  ✓ Installed globally (via sudo)`);
+        } catch {
+          info(`  ✗ Could not install globally. Use --bin-path ~/.local/bin/flight-monitor to install without sudo.`);
+        }
       }
     }
   }
