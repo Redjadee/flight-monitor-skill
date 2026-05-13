@@ -1,4 +1,4 @@
-#!/usr/bin/env tsx
+#!/usr/bin/env node
 import { cmdSetup } from "../commands/setup.js";
 import { cmdAdd } from "../commands/add.js";
 import { cmdList } from "../commands/list.js";

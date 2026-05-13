@@ -3,9 +3,11 @@
   "version": "1.0.0",
   "type": "module",
   "bin": {
-    "flight-monitor": "./bin/flight-monitor.ts"
+    "flight-monitor": "./dist/bin/flight-monitor.js"
   },
   "scripts": {
+    "build": "tsc",
+    "prepare": "npm run build",
     "start": "tsx bin/flight-monitor.ts"
   },
   "dependencies": {
