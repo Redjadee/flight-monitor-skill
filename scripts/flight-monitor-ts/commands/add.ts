@@ -30,7 +30,13 @@ export async function cmdAdd(args: string[]): Promise<void> {
       case "--depart-date":      departDate = args[++i]; break;
       case "--flex-days":        flexDays = parseInt(args[++i], 10); break;
       case "--return-date":      returnDate = args[++i]; break;
-      case "--cabin":            cabin = args[++i].toUpperCase(); break;
+      case "--cabin": {
+        const v = args[++i].toUpperCase();
+        const valid = ["ECONOMY", "PREMIUM_ECONOMY", "BUSINESS", "FIRST"];
+        if (!valid.includes(v)) die(`--cabin must be one of: ${valid.join(", ")}`);
+        cabin = v;
+        break;
+      }
       case "--adults":           adults = parseInt(args[++i], 10); break;
       case "--nonstop":          nonstop = true; break;
       case "--airlines":         airlines = args[++i]; break;

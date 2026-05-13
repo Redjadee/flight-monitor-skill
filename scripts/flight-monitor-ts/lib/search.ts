@@ -35,9 +35,10 @@ export async function searchOneDate(
   dest: string,
   date: string,
   token: string,
-  extraParams?: string
+  extraParams?: string,
+  adults = 1
 ): Promise<Offer | null> {
-  const base = `${AMADEUS_BASE}/v2/shopping/flight-offers?originLocationCode=${origin}&destinationLocationCode=${dest}&departureDate=${date}`;
+  const base = `${AMADEUS_BASE}/v2/shopping/flight-offers?originLocationCode=${origin}&destinationLocationCode=${dest}&departureDate=${date}&adults=${adults}`;
   const url = extraParams ? `${base}&${extraParams}` : base;
 
   let resp: Response;
@@ -96,7 +97,7 @@ async function searchWithParams(
       iterParams = `${iterParams}&returnDate=${iterReturnDate}`;
     }
 
-    const offer = await searchOneDate(monitor.origin, monitor.destination, checkDate, token, iterParams);
+    const offer = await searchOneDate(monitor.origin, monitor.destination, checkDate, token, iterParams, monitor.adults);
     await new Promise((r) => setTimeout(r, 500));
     if (!offer) continue;
 
@@ -117,7 +118,7 @@ export async function searchFlexible(monitorId: string, token: string): Promise<
   if (!monitor) die(`Monitor not found: ${monitorId}`);
 
   const airlines = monitor.airlines?.join(",") ?? "";
-  let paramsBase = `adults=${monitor.adults}&travelClass=${monitor.cabin}&currencyCode=${monitor.currency}&max=5`;
+  let paramsBase = `travelClass=${monitor.cabin}&currencyCode=${monitor.currency}&max=5`;
   if (monitor.nonstop) paramsBase += "&nonStop=true";
   if (airlines) paramsBase += `&includedAirlineCodes=${airlines}`;
 
@@ -125,7 +126,7 @@ export async function searchFlexible(monitorId: string, token: string): Promise<
   if (offer) return offer;
 
   // Fallback: strip travelClass / nonStop / airlines
-  const fallbackParams = `adults=${monitor.adults}&currencyCode=${monitor.currency}&max=5`;
+  const fallbackParams = `currencyCode=${monitor.currency}&max=5`;
   const fallbackOffer = await searchWithParams(monitor, token, fallbackParams);
   if (fallbackOffer) return { ...fallbackOffer, fallback: true };
 
