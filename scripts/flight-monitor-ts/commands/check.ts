@@ -43,6 +43,12 @@ export async function cmdCheck(args: string[]): Promise<void> {
   const offer = await searchFlexible(monitorId, token);
 
   if (!offer) {
+    const monitorsUpdated = JSON.parse(readFileSync(MONITORS_FILE, "utf8")) as Monitor[];
+    const idx = monitorsUpdated.findIndex((m) => m.id === monitorId);
+    if (idx !== -1) {
+      monitorsUpdated[idx].last_checked = nowIso();
+      writeFileSync(MONITORS_FILE, JSON.stringify(monitorsUpdated, null, 2), "utf8");
+    }
     process.stdout.write(
       JSON.stringify({
         status: "ok",

@@ -33,7 +33,9 @@ export async function cmdAdd(args: string[]): Promise<void> {
       }
       case "--return-date":      returnDate = args[++i]; break;
       case "--cabin": {
-        const v = args[++i].toUpperCase();
+        const raw = args[++i];
+        if (!raw) die("--cabin requires a value");
+        const v = raw.toUpperCase();
         const valid = ["ECONOMY", "PREMIUM_ECONOMY", "BUSINESS", "FIRST"];
         if (!valid.includes(v)) die(`--cabin must be one of: ${valid.join(", ")}`);
         cabin = v;
