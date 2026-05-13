@@ -20,6 +20,7 @@ Monitors flight prices via Amadeus API. Uses the `flight-monitor` CLI (must be i
 |--------|---------|
 | Add monitor | `flight-monitor add ...` → register cron → `flight-monitor set-cron` |
 | List monitors | `flight-monitor list` |
+| Cron schedule | Fixed daily at 11:00 AM Shanghai time (see `--cron` in Step 1) |
 | View cron job | `openclaw cron show <cron_job_id>` |
 | Edit cron job | `openclaw cron edit <cron_job_id> --message "..."` |
 | Remove monitor | `flight-monitor remove <id>` → `openclaw cron remove <cron_job_id>` |
@@ -60,7 +61,8 @@ Optional — only ask if ambiguous or user mentioned them:
 - `return_date` — for round trips
 - `airlines` — comma-separated IATA carrier codes (e.g. `CA,CX`)
 - `flex_days` — days ± around depart_date to search (default 0; set 3 if user says "around", "±", "flexible")
-- `check_interval` — how often to poll, default `1d`
+
+**Note:** Cron runs daily at 11:00 AM Shanghai time regardless of `check_interval`. The interval parameter is kept for reference but the actual schedule is fixed.
 
 **Flexible date signals**: "around June 15", "mid-June", "±3 days", "anytime in June" → set `--flex-days 3` (or as specified).
 
@@ -77,8 +79,7 @@ flight-monitor add \
   --cabin BUSINESS \
   [--return-date 2025-06-30] \
   [--nonstop] \
-  [--airlines CA,CX] \
-  [--check-interval 1d]
+  [--airlines CA,CX]
 ```
 
 Note the `monitor_id` from the JSON output.
@@ -90,7 +91,8 @@ Use the `discord_channel_id` from the `flight-monitor add` output as the `--to` 
 ```bash
 openclaw cron add \
   --name "flight-monitor-<MONITOR_ID>" \
-  --every <check_interval> \
+  --cron "0 11 * * *" \
+  --tz Asia/Shanghai \
   --session isolated \
   --agent kay \
   --message "Run: flight-monitor check <MONITOR_ID>. Then report the current price update (see Step 5 in the flight-monitor skill)." \
@@ -99,7 +101,7 @@ openclaw cron add \
 ```
 
 Flag notes:
-- `--every` takes a bare interval value: `6h`, `1d`, `30m` — no quotes needed
+- `--cron` uses cron syntax (分 时 日 月 周) in `--tz` timezone; `--every` is not used because it does not support local timezones and would cause triggers to fire at wrong times
 - `--agent` (not `--agentId`) targets the correct agent for cron-triggered runs
 - `--announce` + `--to` deliver the agent's reply to the Discord channel; `--to` is required when `--announce` is set
 - Never call `openclaw discord send` manually — the `--announce` mechanism handles delivery
