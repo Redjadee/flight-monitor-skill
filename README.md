@@ -68,6 +68,20 @@ ln -s /path/to/flight-monitor ~/.openclaw/skills/flight-monitor
 
 Then reload: `openclaw skills refresh` or restart the Gateway.
 
+## Update
+
+Pull the latest code, rebuild, and reinstall the CLI in one step:
+
+```bash
+flight-monitor update
+```
+
+If you installed to a custom path, pass the same flag used during setup:
+
+```bash
+flight-monitor update --bin-path ~/.local/bin/flight-monitor
+```
+
 ## Usage
 
 ```bash

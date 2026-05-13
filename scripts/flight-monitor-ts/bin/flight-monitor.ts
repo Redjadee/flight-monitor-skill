@@ -7,6 +7,7 @@ import { cmdSetCron } from "../commands/set-cron.js";
 import { cmdCheck } from "../commands/check.js";
 import { cmdDebug } from "../commands/debug.js";
 import { cmdVersion, VERSION } from "../commands/version.js";
+import { cmdUpdate } from "../commands/update.js";
 
 function usage(): void {
   process.stdout.write(`flight-monitor ${VERSION} — Amadeus flight price monitor for OpenClaw
@@ -27,6 +28,7 @@ Usage:
   flight-monitor set-cron   --monitor-id <id> --cron-id <cron-job-id>
   flight-monitor check      <monitor-id>
   flight-monitor debug      [<origin> <destination> <YYYY-MM-DD>]
+  flight-monitor update     [--bin-path <path>]
   flight-monitor version
 
 Data: ~/.flight-monitor/
@@ -44,6 +46,7 @@ async function main(): Promise<void> {
     case "set-cron":        cmdSetCron(rest); break;
     case "check":           await cmdCheck(rest); break;
     case "debug":           await cmdDebug(rest); break;
+    case "update":          await cmdUpdate(rest); break;
     case "version":         cmdVersion(); break;
     case "-h":
     case "--help":
