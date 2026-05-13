@@ -33,7 +33,7 @@ export function loadCredentials(): Credentials {
 
   const clientId = process.env.AMADEUS_CLIENT_ID;
   const clientSecret = process.env.AMADEUS_CLIENT_SECRET;
-  const currency = process.env.AMADEUS_CURRENCY ?? "CNY";
+  const currency = process.env.AMADEUS_CURRENCY ?? "";
 
   if (!clientId || !clientSecret) {
     die("Not configured. Run: flight-monitor setup --client-id <id> --client-secret <secret>");
