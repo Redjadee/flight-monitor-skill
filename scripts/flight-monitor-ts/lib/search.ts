@@ -127,7 +127,8 @@ export async function searchFlexible(monitorId: string, token: string): Promise<
   if (!monitor) die(`Monitor not found: ${monitorId}`);
 
   const airlines = monitor.airlines?.join(",") ?? "";
-  let paramsBase = `travelClass=${monitor.cabin}&currencyCode=${monitor.currency}&max=5`;
+  const currencySuffix = monitor.currency ? `&currencyCode=${monitor.currency}` : "";
+  let paramsBase = `travelClass=${monitor.cabin}&max=5${currencySuffix}`;
   if (monitor.nonstop) paramsBase += "&nonStop=true";
   if (airlines) paramsBase += `&includedAirlineCodes=${airlines}`;
 
@@ -135,7 +136,7 @@ export async function searchFlexible(monitorId: string, token: string): Promise<
   if (offer) return offer;
 
   // Fallback: strip travelClass / nonStop / airlines
-  const fallbackParams = `currencyCode=${monitor.currency}&max=5`;
+  const fallbackParams = `max=5${currencySuffix}`;
   const fallbackOffer = await searchWithParams(monitor, token, fallbackParams);
   if (fallbackOffer) return { ...fallbackOffer, fallback: true };
 

@@ -49,7 +49,8 @@ export async function cmdDebug(args: string[]): Promise<void> {
   // Step 2: Raw flight search
   info("--- Step 2: Flight Offers Search ---");
   const currency = creds.currency;
-  const url = `${AMADEUS_BASE}/v2/shopping/flight-offers?originLocationCode=${origin}&destinationLocationCode=${dest}&departureDate=${date}&adults=1&max=3&currencyCode=${currency}`;
+  const currencyParam = currency ? `&currencyCode=${currency}` : "";
+  const url = `${AMADEUS_BASE}/v2/shopping/flight-offers?originLocationCode=${origin}&destinationLocationCode=${dest}&departureDate=${date}&adults=1&max=3${currencyParam}`;
   info(`URL: ${url}`);
   info("");
 
