@@ -98,13 +98,14 @@ openclaw cron add \
   --agent kay \
   --message "Run: flight-monitor check <MONITOR_ID>. Then report the current price update (see Step 5 in the flight-monitor skill)." \
   --announce \
-  --to <discord_channel_id>
+  --channel discord \
+  --to "channel:<discord_channel_id>"
 ```
 
 Flag notes:
 - `--cron` uses cron syntax (分 时 日 月 周) in `--tz` timezone; `--every` is not used because it does not support local timezones and would cause triggers to fire at wrong times
 - `--agent` (not `--agentId`) targets the correct agent for cron-triggered runs
-- `--announce` + `--to` deliver the agent's reply to the Discord channel; `--to` is required when `--announce` is set
+- `--announce` + `--channel discord --to "channel:<id>"` deliver the agent's reply to Discord; `--channel` and `--to` are both required when `--announce` is set; the `channel:` prefix on `--to` is mandatory
 - Never call `openclaw discord send` manually — the `--announce` mechanism handles delivery
 
 Then capture the cron job ID and save it:
