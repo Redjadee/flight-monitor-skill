@@ -54,7 +54,7 @@ export async function cmdSetup(args: string[]): Promise<void> {
     }
   }
 
-  if (!currency) currency = "CNY";
+  if (!currency) currency = "USD";
   if (!clientId) die("--client-id is required (or run setup after credentials are already configured)");
   if (!clientSecret) die("--client-secret is required (or run setup after credentials are already configured)");
 
