@@ -12,7 +12,7 @@ export function appendHistory(monitorId: string, offer: Offer): void {
 
   const monitors = JSON.parse(readFileSync(MONITORS_FILE, "utf8")) as Monitor[];
   const monitor = monitors.find((m) => m.id === monitorId);
-  const currency = monitor?.currency ?? "USD";
+  const currency = monitor?.currency ?? "CNY";
 
   appendFileSync(
     histFile,
