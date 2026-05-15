@@ -21,7 +21,7 @@ Usage:
                             [--alert-days 7] [--flex-days 3] [--return-date <YYYY-MM-DD>]
                             [--cabin ECONOMY|BUSINESS|FIRST|PREMIUM_ECONOMY]
                             [--adults 1] [--nonstop] [--airlines CA,CX]
-                            [--check-interval 1d]
+                            [--check-interval 1d] [--currency USD]
 
   flight-monitor list
   flight-monitor remove     <monitor-id>

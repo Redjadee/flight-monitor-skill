@@ -18,6 +18,7 @@ export async function cmdAdd(args: string[]): Promise<void> {
   let checkInterval = "1d";
   let alertDays = 7;
   let discordChannel = "";
+  let currency = "";
 
   const req = (flag: string, val: string | undefined): string => {
     if (!val) die(`${flag} requires a value`);
@@ -61,6 +62,7 @@ export async function cmdAdd(args: string[]): Promise<void> {
         break;
       }
       case "--discord-channel":  discordChannel = req("--discord-channel", args[++i]); break;
+      case "--currency":         currency = req("--currency", args[++i]); break;
       default: die(`Unknown option: ${args[i]}`);
     }
   }
@@ -88,7 +90,7 @@ export async function cmdAdd(args: string[]): Promise<void> {
   dest = await resolveIata(dest, token);
 
   const monitorId = `fm-${genId()}`;
-  const currency = creds.currency;
+  if (!currency) currency = creds.currency;
   const airlinesArr = airlines ? airlines.split(",") : [];
 
   const newMonitor: Monitor = {
